@@ -1,0 +1,64 @@
+# Outputs
+outputs/
+
+# Data
+/data/raw/*
+/data/processed/*
+/data/external/xtb_jobs/
+/data/external/xtb_parsed/
+/data/external/merged_features/
+
+# Reports
+reports/tables/
+
+# Models
+*.pt
+*.pth
+*.ckpt
+
+# Cache
+cache/
+*.cache
+
+# Logs
+*.log
+logs/
+
+# Python
+__pycache__/
+*.pyc
+
+# IDE
+.vscode/
+.idea/
+
+# Environment
+.env
+.venv/
+env/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temporary files
+*.tmp
+*.temp
+*.swp
+
+# XTB temporary files
+.xtb*
+xtbopt.xyz
+xtbout.json
+xtbrestart
+xtbtopo.mol
+charges/
+wbo/
+
+# Legacy
+scripts/legacy/*_outputs/
+
+# Large files
+*.zip
+*.tar.gz
+*.h5

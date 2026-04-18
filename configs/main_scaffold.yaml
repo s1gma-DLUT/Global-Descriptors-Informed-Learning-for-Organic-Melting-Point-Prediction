@@ -1,0 +1,64 @@
+# Main scaffold split configuration for single-component melting point prediction
+task_name: "single_component_mp_scaffold"
+split_type: "scaffold"
+seed: 114514
+n_folds: 5
+batch_size: 256
+num_workers: 8
+max_epochs: 300
+freeze_bert_epochs: 3
+final_tune_epochs: 5
+
+# Model settings
+model_name_or_path: "/home/liutao/pxf/MoLFormer-c3-1.1B"
+
+# Data paths - training inputs
+train_csv: "./data/raw/multimodal_train.csv"
+rdkit_feature_path: "./data/processed/rdkit3d_train.npy"
+xtb_feature_path: "./data/processed/XTB_train.pth"
+
+# External molecule paths (for extending to new molecules)
+external_smiles_path: "./data/external/new_molecules.csv"
+external_xtb_output_dir: "./data/external/xtb_jobs"
+merged_xtb_feature_path: "./data/external/merged_features/XTB_merged.pth"
+
+# Optimizer settings
+bert_encoder_lr: 1e-6
+bert_projection_lr: 1e-5
+dmpnn_lr: 3e-4
+fusion_lr: 8.19e-5
+bert_encoder_weight_decay: 1e-2
+bert_projection_weight_decay: 1e-2
+dmpnn_weight_decay: 1e-5
+fusion_weight_decay: 2.49e-2
+
+# Model architecture
+dropout: 0.325
+xtb_hidden_dim: 128
+common_hidden_dim: 192
+xtb_depth: 3
+dmpnn_hidden_dim: 128
+dmpnn_output_dim: 128
+dmpnn_layers: 4
+dmpnn_dropout: 0.2
+use_rdkit_in_xtb: true
+readout_dim: 16
+dynamic_weight_scale: 1.0
+bias_hidden_dim: 64
+main_branch_noise_std: 0.002
+
+# Training settings
+grad_accum_steps: 1
+max_length: 200
+huber_delta: 0.5
+final_lr_scale: 0.3
+clip_grad_norm: 1.0
+cache_graphs: true
+
+# Multi-GPU settings
+multi_gpu_mode: "fold_parallel"
+gpu_ids: "0,1,2,3,4"
+device: "cuda:0"
+
+# Notes
+notes: "Main experiment with scaffold split, using MoLFormer + D-MPNN + XTB + RDKit"
