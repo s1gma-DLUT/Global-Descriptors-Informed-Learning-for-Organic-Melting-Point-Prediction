@@ -98,115 +98,61 @@ class NumpyEncoder(json.JSONEncoder):
         return super().default(obj)
 
 
-def parse_args() -> TrainConfig:
-    parser = argparse.ArgumentParser(
-        description='Frozen-split single-GPU residual-boosting MoLFormer + D-MPNN + XTB/RDKit training.'
-    )
-    parser.add_argument('--data_dir', type=str, default=TrainConfig.data_dir)
-    parser.add_argument('--outputs_root', type=str, default=TrainConfig.outputs_root)
-    parser.add_argument('--model_name', type=str, default=TrainConfig.model_name)
-    parser.add_argument('--split_dir', type=str, default=TrainConfig.split_dir)
-    parser.add_argument('--seed', type=int, default=TrainConfig.seed)
-    parser.add_argument('--n_folds', type=int, default=TrainConfig.n_folds)
-    parser.add_argument('--batch_size', type=int, default=TrainConfig.batch_size)
-    parser.add_argument('--num_workers', type=int, default=TrainConfig.num_workers)
-    parser.add_argument('--grad_accum_steps', type=int, default=TrainConfig.grad_accum_steps)
-    parser.add_argument('--max_length', type=int, default=TrainConfig.max_length)
-    parser.add_argument('--max_epochs', type=int, default=TrainConfig.max_epochs)
-    parser.add_argument('--freeze_bert_epochs', type=int, default=TrainConfig.freeze_bert_epochs)
-    parser.add_argument('--final_tune_epochs', type=int, default=TrainConfig.final_tune_epochs)
-    parser.add_argument('--bert_unfreeze_layers', type=int, default=TrainConfig.bert_unfreeze_layers)
-    parser.add_argument('--bert_encoder_lr', type=float, default=TrainConfig.bert_encoder_lr)
-    parser.add_argument('--bert_projection_lr', type=float, default=TrainConfig.bert_projection_lr)
-    parser.add_argument('--dmpnn_lr', type=float, default=TrainConfig.dmpnn_lr)
-    parser.add_argument('--fusion_lr', type=float, default=TrainConfig.fusion_lr)
-    parser.add_argument('--bert_encoder_weight_decay', type=float, default=TrainConfig.bert_encoder_weight_decay)
-    parser.add_argument('--bert_projection_weight_decay', type=float, default=TrainConfig.bert_projection_weight_decay)
-    parser.add_argument('--dmpnn_weight_decay', type=float, default=TrainConfig.dmpnn_weight_decay)
-    parser.add_argument('--fusion_weight_decay', type=float, default=TrainConfig.fusion_weight_decay)
-    parser.add_argument('--dropout', type=float, default=TrainConfig.dropout)
-    parser.add_argument('--xtb_hidden_dim', type=int, default=TrainConfig.xtb_hidden_dim)
-    parser.add_argument('--common_hidden_dim', type=int, default=TrainConfig.common_hidden_dim)
-    parser.add_argument('--dmpnn_hidden_dim', type=int, default=TrainConfig.dmpnn_hidden_dim)
-    parser.add_argument('--dmpnn_output_dim', type=int, default=TrainConfig.dmpnn_output_dim)
-    parser.add_argument('--dmpnn_layers', type=int, default=TrainConfig.dmpnn_layers)
-    parser.add_argument('--dmpnn_dropout', type=float, default=TrainConfig.dmpnn_dropout)
-    parser.add_argument('--huber_delta', type=float, default=TrainConfig.huber_delta)
-    parser.add_argument('--final_lr_scale', type=float, default=TrainConfig.final_lr_scale)
-    parser.add_argument('--no_cache_graphs', action='store_true')
-    parser.add_argument('--max_folds_to_run', type=int, default=TrainConfig.max_folds_to_run)
-    parser.add_argument('--readout_dim', type=int, default=TrainConfig.readout_dim)
-    parser.add_argument('--dynamic_weight_scale', type=float, default=TrainConfig.dynamic_weight_scale)
-    parser.add_argument('--bias_hidden_dim', type=int, default=TrainConfig.bias_hidden_dim)
-    parser.add_argument('--main_branch_noise_std', type=float, default=TrainConfig.main_branch_noise_std)
-    parser.add_argument('--xtb_wd_mult', type=float, default=TrainConfig.xtb_wd_mult)
-    parser.add_argument('--stage2_batch_size', type=int, default=TrainConfig.stage2_batch_size)
-    parser.add_argument('--stage2_start_epoch', type=int, default=TrainConfig.stage2_start_epoch)
-    parser.add_argument('--freeze_main_head_epoch', type=int, default=TrainConfig.freeze_main_head_epoch)
-    parser.add_argument('--reg_boost_epoch', type=int, default=TrainConfig.reg_boost_epoch)
-    parser.add_argument('--reg_boost_factor', type=float, default=TrainConfig.reg_boost_factor)
-    parser.add_argument('--device', type=str, default=TrainConfig.device)
-    parser.add_argument('--folds_to_run_list', type=str, default=TrainConfig.folds_to_run_list)
-    parser.add_argument('--output_tag', type=str, default=TrainConfig.output_tag)
-    args = parser.parse_args()
-
-    return TrainConfig(
-        data_dir=args.data_dir,
-        outputs_root=args.outputs_root,
-        model_name=args.model_name,
-        split_dir=args.split_dir,
-        seed=args.seed,
-        n_folds=args.n_folds,
-        batch_size=args.batch_size,
-        num_workers=args.num_workers,
-        grad_accum_steps=max(1, args.grad_accum_steps),
-        max_length=args.max_length,
-        max_epochs=args.max_epochs,
-        freeze_bert_epochs=args.freeze_bert_epochs,
-        final_tune_epochs=args.final_tune_epochs,
-        bert_unfreeze_layers=args.bert_unfreeze_layers,
-        bert_encoder_lr=args.bert_encoder_lr,
-        bert_projection_lr=args.bert_projection_lr,
-        dmpnn_lr=args.dmpnn_lr,
-        fusion_lr=args.fusion_lr,
-        bert_encoder_weight_decay=args.bert_encoder_weight_decay,
-        bert_projection_weight_decay=args.bert_projection_weight_decay,
-        dmpnn_weight_decay=args.dmpnn_weight_decay,
-        fusion_weight_decay=args.fusion_weight_decay,
-        dropout=args.dropout,
-        xtb_hidden_dim=args.xtb_hidden_dim,
-        common_hidden_dim=args.common_hidden_dim,
-        dmpnn_hidden_dim=args.dmpnn_hidden_dim,
-        dmpnn_output_dim=args.dmpnn_output_dim,
-        dmpnn_layers=args.dmpnn_layers,
-        dmpnn_dropout=args.dmpnn_dropout,
-        use_rdkit_in_xtb=True,
-        huber_delta=args.huber_delta,
-        final_lr_scale=args.final_lr_scale,
-        cache_graphs=not args.no_cache_graphs,
-        max_folds_to_run=max(1, min(args.max_folds_to_run, args.n_folds)),
-        readout_dim=args.readout_dim,
-        dynamic_weight_scale=args.dynamic_weight_scale,
-        bias_hidden_dim=args.bias_hidden_dim,
-        main_branch_noise_std=args.main_branch_noise_std,
-        xtb_wd_mult=args.xtb_wd_mult,
-        stage2_batch_size=args.stage2_batch_size,
-        stage2_start_epoch=args.stage2_start_epoch,
-        freeze_main_head_epoch=args.freeze_main_head_epoch,
-        reg_boost_epoch=args.reg_boost_epoch,
-        reg_boost_factor=args.reg_boost_factor,
-        device=args.device,
-        folds_to_run_list=args.folds_to_run_list,
-        output_tag=args.output_tag,
-    )
-
-
 def set_seed(seed: int) -> None:
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
+
+
+def get_run_basename(timestamp: str, cfg: TrainConfig) -> str:
+    """Generate run basename from timestamp and config."""
+    parts = [
+        'mp',
+        'frozen_scaffold',
+        f'fold{cfg.n_folds}',
+        f'bs{cfg.batch_size}',
+        f'seed{cfg.seed}',
+        timestamp
+    ]
+    if cfg.output_tag:
+        parts.insert(1, cfg.output_tag)
+    return '_'.join(parts)
+
+
+def get_git_commit(repo_dir: str) -> str:
+    """Get current git commit hash."""
+    try:
+        result = subprocess.run(
+            ['git', 'rev-parse', 'HEAD'],
+            cwd=repo_dir,
+            capture_output=True,
+            text=True,
+            check=True
+        )
+        return result.stdout.strip()
+    except Exception:
+        return 'unknown'
+
+
+def load_frozen_split_manifest(split_dir: str) -> pd.DataFrame:
+    """Load frozen split manifest."""
+    manifest_file = os.path.join(split_dir, 'split_manifest.csv')
+    if not os.path.exists(manifest_file):
+        raise FileNotFoundError(f"Split manifest file not found: {manifest_file}")
+    return pd.read_csv(manifest_file)
+
+
+def validate_frozen_manifest_alignment(smiles_list: List[str], split_manifest: pd.DataFrame) -> None:
+    """Validate that split manifest aligns with current dataset."""
+    if len(smiles_list) != len(split_manifest):
+        raise ValueError(f"Mismatch: dataset size {len(smiles_list)} != manifest size {len(split_manifest)}")
+    # Check sample IDs are consecutive and start from 0
+    expected_ids = list(range(len(smiles_list)))
+    actual_ids = sorted(split_manifest['sample_id'].astype(int).tolist())
+    if expected_ids != actual_ids:
+        raise ValueError(f"Sample IDs in manifest do not match expected range [0, {len(smiles_list)-1}]")
 
 
 def parse_selected_folds(cfg: TrainConfig) -> List[int]:
@@ -400,9 +346,9 @@ def smiles_to_pyg_data(smiles: str, use_dummy_on_failure: bool = True) -> Option
 # =========================
 def load_aligned_multimodal_data(data_dir: str) -> Tuple[np.ndarray, np.ndarray, np.ndarray, List[str]]:
     print(f'[{datetime.now().strftime("%Y-%m-%d %H:%M:%S")}] Loading joint data from {data_dir}...', flush=True)
-    train_csv = os.path.join(data_dir, 'multimodal_train.csv')
-    rdkit_path = os.path.join(data_dir, 'rdkit3d_train.npy')
-    xtb_path = os.path.join(data_dir, 'XTB_train.pth')
+    train_csv = os.path.join(data_dir, 'raw', 'multimodal_train.csv')
+    rdkit_path = os.path.join(data_dir, 'processed', 'rdkit3d_train.npy')
+    xtb_path = os.path.join(data_dir, 'processed', 'XTB_train.pth')
 
     train_df = pd.read_csv(train_csv)
     rdkit_features = np.load(rdkit_path)
@@ -1753,7 +1699,7 @@ def run_training(cfg: TrainConfig, device: torch.device) -> None:
 
 
 def main() -> None:
-    cfg = parse_args()
+    cfg = TrainConfig()
     run_training(cfg, infer_device(cfg))
 
 
