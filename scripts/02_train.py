@@ -58,11 +58,18 @@ def main():
         ('multi_gpu_mode', config.get('multi_gpu_mode', 'none')),
         ('gpu_ids', config.get('gpu_ids', '')),
         ('device', config.get('device', '')),
+        ('use_frozen_split', config.get('use_frozen_split', False)),
+        ('split_dir', config.get('split_dir', 'splits/scaffold')),
+        ('split_manifest', config.get('split_manifest', 'splits/scaffold/split_manifest.csv')),
     ]
     
     for param_name, param_value in optional_params:
-        if param_value:
-            cmd.extend([f'--{param_name}', str(param_value)])
+        if param_name == 'use_frozen_split':
+            if param_value:
+                cmd.extend([f'--{param_name}'])
+        else:
+            if param_value:
+                cmd.extend([f'--{param_name}', str(param_value)])
     
     print(f"Running training with config: {args.config}")
     print(f"Output directory: {full_output_dir}")

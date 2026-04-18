@@ -90,6 +90,9 @@ class TrainConfig:
     folds_to_run_list: str = ''
     fold_parallel_workers: int = 0
     output_tag: str = ''
+    use_frozen_split: bool = False
+    split_dir: str = 'splits/scaffold'
+    split_manifest: str = 'splits/scaffold/split_manifest.csv'
 
 
 class NumpyEncoder(json.JSONEncoder):
@@ -157,6 +160,9 @@ def parse_args() -> TrainConfig:
     parser.add_argument('--folds_to_run_list', type=str, default=TrainConfig.folds_to_run_list)
     parser.add_argument('--fold_parallel_workers', type=int, default=TrainConfig.fold_parallel_workers)
     parser.add_argument('--output_tag', type=str, default=TrainConfig.output_tag)
+    parser.add_argument('--use_frozen_split', action='store_true', default=TrainConfig.use_frozen_split)
+    parser.add_argument('--split_dir', type=str, default=TrainConfig.split_dir)
+    parser.add_argument('--split_manifest', type=str, default=TrainConfig.split_manifest)
     args = parser.parse_args()
 
     return TrainConfig(
@@ -211,6 +217,9 @@ def parse_args() -> TrainConfig:
         folds_to_run_list=args.folds_to_run_list,
         fold_parallel_workers=args.fold_parallel_workers,
         output_tag=args.output_tag,
+        use_frozen_split=args.use_frozen_split,
+        split_dir=args.split_dir,
+        split_manifest=args.split_manifest,
     )
 
 
@@ -422,6 +431,62 @@ def build_balanced_scaffold_folds(smiles_list: Sequence[str], n_folds: int = 5) 
         fold_sizes[smallest_fold] += len(group)
 
     return fold_scaffold_indices, none_idx, scaffold_groups
+
+
+def load_frozen_fold_indices(split_dir: str, fold: int, total_samples: int) -> Tuple[List[int], List[int], pd.DataFrame]:
+    """
+    Load frozen fold indices from split files.
+    
+    Args:
+        split_dir: Directory containing split files
+        fold: Fold number (1-based)
+        total_samples: Total number of samples in the dataset
+        
+    Returns:
+        Tuple of (train_idx, val_idx, split_manifest)
+    """
+    # Load fold files
+    train_file = os.path.join(split_dir, f'fold{fold}_train.csv')
+    val_file = os.path.join(split_dir, f'fold{fold}_val.csv')
+    manifest_file = os.path.join(split_dir, 'split_manifest.csv')
+    
+    # Check if files exist
+    if not os.path.exists(train_file):
+        raise FileNotFoundError(f"Frozen split file not found: {train_file}")
+    if not os.path.exists(val_file):
+        raise FileNotFoundError(f"Frozen split file not found: {val_file}")
+    if not os.path.exists(manifest_file):
+        raise FileNotFoundError(f"Split manifest file not found: {manifest_file}")
+    
+    # Load files
+    train_df = pd.read_csv(train_file)
+    val_df = pd.read_csv(val_file)
+    manifest_df = pd.read_csv(manifest_file)
+    
+    # Get indices
+    train_idx = train_df['sample_id'].tolist()
+    val_idx = val_df['sample_id'].tolist()
+    
+    # Validate indices
+    train_idx_set = set(train_idx)
+    val_idx_set = set(val_idx)
+    
+    # Check no overlap between train and val
+    if train_idx_set & val_idx_set:
+        raise ValueError(f"Overlap between train and val indices for fold {fold}")
+    
+    # Check val contains no none-scaffold samples
+    val_is_none_scaffold = val_df['is_none_scaffold'].tolist()
+    if any(val_is_none_scaffold):
+        raise ValueError(f"Val set contains none-scaffold samples for fold {fold}")
+    
+    # Check all indices are within range
+    all_idx = train_idx_set | val_idx_set
+    for idx in all_idx:
+        if idx < 0 or idx >= total_samples:
+            raise ValueError(f"Sample ID {idx} out of range [0, {total_samples-1}]")
+    
+    return train_idx, val_idx, manifest_df
 
 
 # ===========================
@@ -1435,34 +1500,64 @@ def run_training(cfg: TrainConfig, device: torch.device) -> None:
     git_commit = get_git_commit(repo_dir)
 
     targets_raw, xtb_raw, rdkit_raw, smiles_list = load_aligned_multimodal_data(cfg.data_dir)
-
-    fold_scaffold_indices, none_idx, scaffold_groups = build_balanced_scaffold_folds(smiles_list, n_folds=cfg.n_folds)
     total_sample_count = len(smiles_list)
-    valid_scaffold_sample_count = sum(len(group) for group in scaffold_groups)
 
-    split_manifest = pd.DataFrame(
-        {
-            'sample_id': np.arange(total_sample_count, dtype=np.int64),
-            'smiles': smiles_list,
-            'scaffold': [get_scaffold(smiles) for smiles in smiles_list],
+    # Handle split loading
+    if cfg.use_frozen_split:
+        print(f'[{datetime.now().strftime("%Y-%m-%d %H:%M:%S")}] Using frozen scaffold split from {cfg.split_dir}', flush=True)
+        # Load split manifest to get none_idx and other info
+        manifest_file = os.path.join(cfg.split_dir, 'split_manifest.csv')
+        if not os.path.exists(manifest_file):
+            raise FileNotFoundError(f"Split manifest file not found: {manifest_file}")
+        split_manifest = pd.read_csv(manifest_file)
+        none_idx = split_manifest[split_manifest['is_none_scaffold']]['sample_id'].tolist()
+        valid_scaffold_sample_count = total_sample_count - len(none_idx)
+        # Load split summary to get scaffold info
+        summary_file = os.path.join(cfg.split_dir, 'split_summary.json')
+        if os.path.exists(summary_file):
+            with open(summary_file, 'r') as f:
+                split_summary = json.load(f)
+        else:
+            # Estimate scaffold count if summary not available
+            split_summary = {
+                'run_id': run_id,
+                'total_aligned_samples': total_sample_count,
+                'valid_scaffold_samples': valid_scaffold_sample_count,
+                'none_scaffold_samples_train_only': len(none_idx),
+                'unique_valid_scaffolds': len(set(split_manifest['scaffold'].dropna())),
+                'folds_to_run': selected_folds,
+            }
+        split_manifest_lookup = split_manifest.set_index('sample_id', drop=False)
+    else:
+        print(f'[{datetime.now().strftime("%Y-%m-%d %H:%M:%S")}] Building dynamic scaffold split', flush=True)
+        fold_scaffold_indices, none_idx, scaffold_groups = build_balanced_scaffold_folds(smiles_list, n_folds=cfg.n_folds)
+        valid_scaffold_sample_count = sum(len(group) for group in scaffold_groups)
+
+        split_manifest = pd.DataFrame(
+            {
+                'sample_id': np.arange(total_sample_count, dtype=np.int64),
+                'smiles': smiles_list,
+                'scaffold': [get_scaffold(smiles) for smiles in smiles_list],
+            }
+        )
+        assigned_val_fold = np.zeros(total_sample_count, dtype=np.int64)
+        for fold_idx, fold_indices in enumerate(fold_scaffold_indices, start=1):
+            assigned_val_fold[np.asarray(fold_indices, dtype=np.int64)] = fold_idx
+        split_manifest['assigned_val_fold'] = assigned_val_fold
+        split_manifest['is_none_scaffold'] = split_manifest['sample_id'].isin(set(none_idx))
+        split_manifest_lookup = split_manifest.set_index('sample_id', drop=False)
+
+        split_summary = {
+            'run_id': run_id,
+            'total_aligned_samples': total_sample_count,
+            'valid_scaffold_samples': valid_scaffold_sample_count,
+            'none_scaffold_samples_train_only': len(none_idx),
+            'unique_valid_scaffolds': len(scaffold_groups),
+            'fold_valid_scaffold_val_sizes': {f'fold_{i + 1}': len(fold_scaffold_indices[i]) for i in range(cfg.n_folds)},
+            'folds_to_run': selected_folds,
         }
-    )
-    assigned_val_fold = np.zeros(total_sample_count, dtype=np.int64)
-    for fold_idx, fold_indices in enumerate(fold_scaffold_indices, start=1):
-        assigned_val_fold[np.asarray(fold_indices, dtype=np.int64)] = fold_idx
-    split_manifest['assigned_val_fold'] = assigned_val_fold
-    split_manifest['is_none_scaffold'] = split_manifest['sample_id'].isin(set(none_idx))
-    split_manifest_lookup = split_manifest.set_index('sample_id', drop=False)
-
-    split_summary = {
-        'run_id': run_id,
-        'total_aligned_samples': total_sample_count,
-        'valid_scaffold_samples': valid_scaffold_sample_count,
-        'none_scaffold_samples_train_only': len(none_idx),
-        'unique_valid_scaffolds': len(scaffold_groups),
-        'fold_valid_scaffold_val_sizes': {f'fold_{i + 1}': len(fold_scaffold_indices[i]) for i in range(cfg.n_folds)},
-        'folds_to_run': selected_folds,
-    }
+    
+    # Save split info
     save_json(split_summary, os.path.join(output_dir, 'split_summary.json'))
     save_dataframe(split_manifest, os.path.join(output_dir, 'split_manifest'), index=False)
     print(json.dumps(split_summary, indent=2, ensure_ascii=False), flush=True)
@@ -1477,17 +1572,32 @@ def run_training(cfg: TrainConfig, device: torch.device) -> None:
     all_oof_frames: List[pd.DataFrame] = []
 
     for fold in selected_folds:
-        fold_zero = fold - 1
-        val_idx = sorted(fold_scaffold_indices[fold_zero])
-        val_idx_set = set(val_idx)
-        train_idx = sorted(list((all_indices - val_idx_set) | none_idx_set))
+        if cfg.use_frozen_split:
+            # Load frozen split indices
+            train_idx, val_idx, _ = load_frozen_fold_indices(cfg.split_dir, fold, total_sample_count)
+            val_idx_set = set(val_idx)
+            # Validate no none-scaffold in val
+            val_is_none_scaffold = split_manifest.loc[val_idx]['is_none_scaffold'].tolist()
+            assert not any(val_is_none_scaffold), 'None-scaffold samples leaked into validation set.'
+            # Validate no overlap
+            assert len(set(train_idx) & val_idx_set) == 0, 'Train/Val overlap detected.'
+            # Log frozen split info
+            print('\n' + '=' * 80, flush=True)
+            print(f'Fold {fold}/{cfg.n_folds} | Split: frozen_scaffold | Train: {len(train_idx)} | Val: {len(val_idx)} | None(train-only): {len(none_idx)}', flush=True)
+            print('=' * 80, flush=True)
+        else:
+            # Use dynamic split
+            fold_zero = fold - 1
+            val_idx = sorted(fold_scaffold_indices[fold_zero])
+            val_idx_set = set(val_idx)
+            train_idx = sorted(list((all_indices - val_idx_set) | none_idx_set))
 
-        assert len(val_idx_set & none_idx_set) == 0, 'None-scaffold samples leaked into validation set.'
-        assert len(set(train_idx) & val_idx_set) == 0, 'Train/Val overlap detected.'
+            assert len(val_idx_set & none_idx_set) == 0, 'None-scaffold samples leaked into validation set.'
+            assert len(set(train_idx) & val_idx_set) == 0, 'Train/Val overlap detected.'
 
-        print('\n' + '=' * 80, flush=True)
-        print(f'Fold {fold}/{cfg.n_folds} | Train: {len(train_idx)} | Val: {len(val_idx)} | None(train-only): {len(none_idx)}', flush=True)
-        print('=' * 80, flush=True)
+            print('\n' + '=' * 80, flush=True)
+            print(f'Fold {fold}/{cfg.n_folds} | Split: dynamic_scaffold | Train: {len(train_idx)} | Val: {len(val_idx)} | None(train-only): {len(none_idx)}', flush=True)
+            print('=' * 80, flush=True)
 
         fold_scaler_dir = os.path.join(output_dir, f'scalers_fold{fold}')
         imp_xtb = SimpleImputer(strategy='median')
