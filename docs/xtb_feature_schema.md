@@ -62,6 +62,24 @@ This document describes the 17-dimensional **mixed-source physicochemical featur
 - **Output**: 17D feature bundle compatible with XTB_train.pth
 - **Validation**: Ensures schema compatibility
 
+## Schema Layers
+
+The feature bundle is organized into three distinct schema layers:
+
+### 1. XTB_PARSED_16D_NAMES (16 dimensions)
+- Directly parsed from XTB output or derived from XTB parsed values
+- Does NOT include molecular volume
+- Defined in: `src/preprocessing/schema.py`
+
+### 2. RDKIT_EXTRA_1D_NAMES (1 dimension)
+- `Molecular_Volume_cm3_mol` - Computed separately by RDKit
+- Defined in: `src/preprocessing/schema.py`
+
+### 3. FULL_17D_FEATURE_NAMES (17 dimensions)
+- Complete feature bundle: XTB_PARSED_16D_NAMES + RDKIT_EXTRA_1D_NAMES
+- Compatible with old XTB_train.pth format
+- Defined in: `src/preprocessing/schema.py`
+
 ## Workflow for New Molecules
 
 1. **XTB Calculation**: Run XTB on new molecules

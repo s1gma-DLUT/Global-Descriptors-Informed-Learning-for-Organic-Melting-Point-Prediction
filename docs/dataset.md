@@ -55,8 +55,27 @@ XTB features include:
 - Charge distribution statistics
 - Dipole moments
 
+### Schema Layers
+
+The feature bundle is organized into three distinct schema layers:
+
+#### 1. XTB_PARSED_16D_NAMES (16 dimensions)
+- Directly parsed from XTB output or derived from XTB parsed values
+- Does NOT include molecular volume
+- Defined in: `src/preprocessing/schema.py`
+
+#### 2. RDKIT_EXTRA_1D_NAMES (1 dimension)
+- `Molecular_Volume_cm3_mol` - Computed separately by RDKit
+- Defined in: `src/preprocessing/schema.py`
+
+#### 3. FULL_17D_FEATURE_NAMES (17 dimensions)
+- Complete feature bundle: XTB_PARSED_16D_NAMES + RDKIT_EXTRA_1D_NAMES
+- Compatible with old XTB_train.pth format
+- Defined in: `src/preprocessing/schema.py`
+
 ### XTB Feature Dimensions (17 total)
 
+#### 16D XTB Features (from XTB calculations):
 1. N_Atoms - Total number of atoms
 2. N_Heavy_Atoms - Number of heavy atoms
 3. Molecular_Mass_amu - Molecular mass in atomic mass units
@@ -73,7 +92,9 @@ XTB features include:
 14. Charge_Mean - Mean partial charge
 15. Charge_STD - Standard deviation of partial charges
 16. Charge_Range - Range of partial charges
-17. Molecular_Volume_cm3_mol - Molecular volume (cm^3/mol)
+
+#### 1D RDKit Feature (separately computed):
+17. Molecular_Volume_cm3_mol - Approximate molecular volume based on molar refractivity
 
 ### XTB Computation Method
 

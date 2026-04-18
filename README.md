@@ -43,8 +43,10 @@ single_component_mp_prediction/
 │   ├── __init__.py
 │   ├── preprocessing/         # Data preprocessing
 │   │   ├── __init__.py
-│   │   ├── xtb_extract.py     # XTB feature extraction
-│   │   └── merge_features.py  # Feature merging
+│   │   ├── schema.py          # Feature schema definitions
+│   │   ├── xtb_extract.py     # XTB feature extraction (16D)
+│   │   ├── rdkit_features.py  # RDKit volume calculation (1D)
+│   │   └── merge_features.py  # Feature merging (16D + 1D)
 │   ├── data/              # Data loading and processing
 │   ├── models/            # Model definitions
 │   ├── training/          # Training utilities
@@ -317,7 +319,9 @@ python scripts/00c_merge_xtb_features.py ... --no_canonical
 
 ## XTB Feature Details
 
-XTB features provide 17 quantum mechanical properties:
+The feature bundle is a **mixed-source physicochemical feature bundle**:
+
+### 16D XTB Features (from XTB calculations):
 1. N_Atoms
 2. N_Heavy_Atoms
 3. Molecular_Mass_amu
@@ -334,7 +338,11 @@ XTB features provide 17 quantum mechanical properties:
 14. Charge_Mean
 15. Charge_STD
 16. Charge_Range
-17. Molecular_Volume_cm3_mol
+
+### 1D RDKit Feature (separately computed):
+17. Molecular_Volume_cm3_mol - Approximate molecular volume based on molar refractivity
+
+**Important Note**: Despite the historical name `XTB_train.pth`, this is not a pure XTB feature set. It is a hybrid bundle where 16 dimensions come from XTB and 1 dimension comes from RDKit.
 
 ## Results
 

@@ -39,6 +39,9 @@ Note:
     This script generates the input files and commands for XTB calculations,
     but does NOT run the actual XTB calculations. You need to execute the
     generated commands separately using the pxf_xtb conda environment.
+    
+    IMPORTANT: This script only handles 16D XTB features. Molecular volume
+    (Molecular_Volume_cm3_mol) is computed separately by RDKit.
 """
 
 import os
@@ -56,15 +59,7 @@ import pandas as pd
 import torch
 import numpy as np
 
-
-XTB_FEATURE_NAMES = [
-    'N_Atoms', 'N_Heavy_Atoms', 'Molecular_Mass_amu',
-    'Electronic_Energy_AU', 'Electronic_Energy_kcal_mol',
-    'HOMO_eV', 'LUMO_eV', 'HOMO_LUMO_Gap_eV',
-    'Dipole_Total_Debye', 'Dipole_Theta_deg', 'Dipole_Phi_deg',
-    'Charge_Min', 'Charge_Max', 'Charge_Mean', 'Charge_STD', 'Charge_Range',
-    'Molecular_Volume_cm3_mol'
-]
+from src.preprocessing.schema import XTB_PARSED_16D_NAMES, XTB_PARSED_16D_DIM
 
 XTB_CONDA_ENV = "pxf_xtb"
 XTB_BINARY_DEFAULT = "/home/liutao/.conda/envs/pxf_xtb/bin/xtb"
@@ -483,13 +478,16 @@ XTB Requirements:
         print(f"2. Run XTB calculations:")
         print(f"   conda run -n {XTB_CONDA_ENV} bash {batch_script}")
         print(f"3. Wait for XTB calculations to complete")
-        print(f"4. Extract features:")
-        print(f"   python -m src.preprocessing.xtb_extract --xtb_dir {args.output_dir}/outputs")
-        print(f"5. Merge features:")
-        print(f"   python scripts/00c_merge_xtb_features.py \\")
-        print(f"      --existing_xtb data/processed/XTB_train.pth \\")
-        print(f"      --new_features {args.output_dir}/parsed/extracted_features.csv \\")
-        print(f"      --output data/processed/XTB_train_extended.pth")
+        print(f"4. Extract 16D XTB features:")
+        print(f"   python -m src.preprocessing.xtb_extract --xtb_dir {args.output_dir}/outputs --output_csv {args.output_dir}/parsed/extracted_features.csv")
+        print(f"5. Compute RDKit volume (1D):")
+        print(f"   python scripts/00c_compute_rdkit_volume.py --input_smiles {args.output_dir}/missing_molecules.csv --output_csv {args.output_dir}/parsed/rdkit_volumes.csv")
+        print(f"6. Merge to 17D feature bundle:")
+        print(f"   python scripts/00d_merge_feature_bundle.py \\")
+        print(f"      --xtb_csv {args.output_dir}/parsed/extracted_features.csv \\")
+        print(f"      --volume_csv {args.output_dir}/parsed/rdkit_volumes.csv \\")
+        print(f"      --output_pth data/processed/XTB_train_extended.pth \\")
+        print(f"      --existing_pth data/processed/XTB_train.pth")
         print("=" * 60)
 
         return result

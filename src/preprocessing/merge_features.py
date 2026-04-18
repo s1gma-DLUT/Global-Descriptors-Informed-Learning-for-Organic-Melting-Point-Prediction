@@ -20,30 +20,18 @@ import numpy as np
 import pandas as pd
 import torch
 
+from .schema import (
+    XTB_PARSED_16D_NAMES,
+    RDKIT_EXTRA_1D_NAMES,
+    FULL_17D_FEATURE_NAMES,
+    XTB_PARSED_16D_DIM,
+    RDKIT_EXTRA_1D_DIM,
+    FULL_17D_FEATURE_DIM
+)
 
-# Final 17-dimensional feature schema
-FEATURE_NAMES = [
-    'N_Atoms',
-    'N_Heavy_Atoms',
-    'Molecular_Mass_amu',
-    'Electronic_Energy_AU',
-    'Electronic_Energy_kcal_mol',
-    'HOMO_eV',
-    'LUMO_eV',
-    'HOMO_LUMO_Gap_eV',
-    'Dipole_Total_Debye',
-    'Dipole_Theta_deg',
-    'Dipole_Phi_deg',
-    'Charge_Min',
-    'Charge_Max',
-    'Charge_Mean',
-    'Charge_STD',
-    'Charge_Range',
-    'Molecular_Volume_cm3_mol'
-]
-
-XTB_FEATURE_NAMES = FEATURE_NAMES[:16]  # First 16 features from XTB
-VOLUME_FEATURE_NAME = FEATURE_NAMES[16]  # Last feature from RDKit
+FEATURE_NAMES = FULL_17D_FEATURE_NAMES
+XTB_FEATURE_NAMES = XTB_PARSED_16D_NAMES
+VOLUME_FEATURE_NAME = RDKIT_EXTRA_1D_NAMES[0]
 
 
 def load_xtb_features(pth_path: str) -> Tuple[List[str], torch.Tensor]:
@@ -106,6 +94,11 @@ def merge_feature_bundle(
     xtb_df = pd.read_csv(xtb_features_csv)
     xtb_smiles = xtb_df['SMILES'].tolist()
     
+    # Validate XTB feature columns
+    missing_xtb_columns = [col for col in XTB_FEATURE_NAMES if col not in xtb_df.columns]
+    if missing_xtb_columns:
+        raise ValueError(f"Missing XTB feature columns: {missing_xtb_columns}")
+    
     # Load volume features
     volume_dict = load_volume_features(volume_features_csv)
     
@@ -132,13 +125,17 @@ def merge_feature_bundle(
         if smiles in existing_dict:
             continue
         
-        # Get XTB features (first 16 dimensions)
+        # Get XTB features (16 dimensions)
         xtb_feats = []
         for feat_name in XTB_FEATURE_NAMES:
             if feat_name in row:
                 xtb_feats.append(float(row[feat_name]))
             else:
                 xtb_feats.append(0.0)
+        
+        # Validate XTB feature length
+        if len(xtb_feats) != XTB_PARSED_16D_DIM:
+            raise ValueError(f"Expected {XTB_PARSED_16D_DIM} XTB features, got {len(xtb_feats)}")
         
         # Get volume feature
         if smiles in volume_dict:
@@ -149,6 +146,11 @@ def merge_feature_bundle(
         
         # Create complete 17D feature vector
         full_feats = xtb_feats + [volume]
+        
+        # Validate full feature length
+        if len(full_feats) != FULL_17D_FEATURE_DIM:
+            raise ValueError(f"Expected {FULL_17D_FEATURE_DIM} features, got {len(full_feats)}")
+        
         feat_vec = torch.tensor(full_feats, dtype=torch.float32)
         
         merged_smiles.append(smiles)
@@ -170,9 +172,11 @@ def merge_feature_bundle(
         },
         'schema_info': {
             'description': 'Mixed-source physicochemical feature bundle',
-            'xtb_features': 16,
-            'rdkit_features': 1,
-            'total_dimensions': 17
+            'xtb_features': XTB_PARSED_16D_DIM,
+            'rdkit_features': RDKIT_EXTRA_1D_DIM,
+            'total_dimensions': FULL_17D_FEATURE_DIM,
+            'xtb_feature_names': XTB_FEATURE_NAMES,
+            'rdkit_feature_names': RDKIT_EXTRA_1D_NAMES
         }
     }
     
@@ -207,14 +211,15 @@ def validate_feature_bundle(pth_path: str) -> Dict[str, Any]:
         'info': {
             'num_molecules': len(data['smiles']),
             'feature_shape': data['features'].shape,
-            'feature_names': data.get('feature_names', [])
+            'feature_names': data.get('feature_names', []),
+            'schema_info': data.get('schema_info', {})
         }
     }
     
     # Check feature dimensions
-    if data['features'].shape[1] != 17:
+    if data['features'].shape[1] != FULL_17D_FEATURE_DIM:
         validation['valid'] = False
-        validation['errors'].append(f"Expected 17 features, got {data['features'].shape[1]}")
+        validation['errors'].append(f"Expected {FULL_17D_FEATURE_DIM} features, got {data['features'].shape[1]}")
     
     # Check feature names
     if 'feature_names' in data:
@@ -222,6 +227,10 @@ def validate_feature_bundle(pth_path: str) -> Dict[str, Any]:
             validation['warnings'].append('Feature names do not match expected schema')
     else:
         validation['warnings'].append('Missing feature_names')
+    
+    # Check schema info
+    if 'schema_info' not in data:
+        validation['warnings'].append('Missing schema_info')
     
     return validation
 

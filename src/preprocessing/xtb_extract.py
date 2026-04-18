@@ -1,9 +1,9 @@
 """
 XTB Feature Extraction Module
 
-This module provides functionality to extract features from XTB calculation outputs.
+This module provides functionality to extract 16-dimensional features from XTB calculation outputs.
 
-FEATURE FIELD STATUS (17 dimensions):
+FEATURE FIELD STATUS (16 dimensions):
     0.  N_Atoms - Heavy atom count (excluding H) - DIRECT PARSE
     1.  N_Heavy_Atoms - Same as N_Atoms for consistency - DIRECT PARSE
     2.  Molecular_Mass_amu - Calculated from atom counts - DERIVED
@@ -13,28 +13,24 @@ FEATURE FIELD STATUS (17 dimensions):
     6.  LUMO_eV - LUMO energy in eV - DIRECT PARSE
     7.  HOMO_LUMO_Gap_eV - HOMO-LUMO gap in eV - DIRECT PARSE
     8.  Dipole_Total_Debye - Total dipole moment - DIRECT PARSE
-    9.  Dipole_Theta_deg - Dipole theta angle - DIRECT PARSE
-    10. Dipole_Phi_deg - Dipole phi angle - DIRECT PARSE
+    9.  Dipole_Theta_deg - Dipole theta angle - DERIVED
+    10. Dipole_Phi_deg - Dipole phi angle - DERIVED
     11. Charge_Min - Minimum atomic charge - DIRECT PARSE
     12. Charge_Max - Maximum atomic charge - DIRECT PARSE
     13. Charge_Mean - Mean atomic charge - DIRECT PARSE
     14. Charge_STD - Standard deviation of charges - DIRECT PARSE
     15. Charge_Range - Range of charges (max - min) - DERIVED
-    16. Molecular_Volume_cm3_mol - Molecular volume - UNRESOLVED (not in std XTB output)
 
-XTB_train.pth structure - VERIFIED:
-    {
-        'features': torch.Tensor,     # Shape: (n_molecules, 17)
-        'targets': torch.Tensor,     # Melting points
-        'smiles': List[str],
-        'feature_names': List[str]    # Same 17 field names as above
-    }
+NOTE:
+    Molecular_Volume_cm3_mol is NOT included here. It is computed separately by RDKit.
 
 USAGE:
     For new molecules, use the workflow:
         1. scripts/00b_compute_xtb_features.py --step generate_cmds
         2. Run: conda run -n pxf_xtb bash run_xtb_batch.sh
-        3. scripts/00c_merge_xtb_features.py --mode merge
+        3. Extract 16D features: this module
+        4. Compute RDKit volume: scripts/00c_compute_rdkit_volume.py
+        5. Merge to 17D: scripts/00d_merge_feature_bundle.py
 """
 
 import os
@@ -49,28 +45,7 @@ import pandas as pd
 import torch
 from tqdm import tqdm
 
-
-XTB_FEATURE_NAMES = [
-    'N_Atoms',
-    'N_Heavy_Atoms',
-    'Molecular_Mass_amu',
-    'Electronic_Energy_AU',
-    'Electronic_Energy_kcal_mol',
-    'HOMO_eV',
-    'LUMO_eV',
-    'HOMO_LUMO_Gap_eV',
-    'Dipole_Total_Debye',
-    'Dipole_Theta_deg',
-    'Dipole_Phi_deg',
-    'Charge_Min',
-    'Charge_Max',
-    'Charge_Mean',
-    'Charge_STD',
-    'Charge_Range',
-    'Molecular_Volume_cm3_mol'
-]
-
-XTB_FEATURE_DIM = 17
+from .schema import XTB_PARSED_16D_NAMES, XTB_PARSED_16D_DIM
 
 ATOMIC_MASSES = {
     1: 1.008,    # H
@@ -103,7 +78,6 @@ class XTBResult:
     charge_mean: float = 0.0
     charge_std: float = 0.0
     charge_range: float = 0.0
-    molecular_volume_cm3_mol: float = 0.0
     success: bool = False
     error_message: Optional[str] = None
     raw_parsing_notes: List[str] = field(default_factory=list)
@@ -112,7 +86,7 @@ class XTBResult:
 
 def parse_xtb_output(xtb_output_text: str, smiles: str) -> XTBResult:
     """
-    Parse XTB output text and extract all 17 features.
+    Parse XTB output text and extract all 16 features.
 
     This parser extracts features directly from XTB output where possible.
     Fallback/estimation is clearly marked in field_status.
@@ -125,7 +99,7 @@ def parse_xtb_output(xtb_output_text: str, smiles: str) -> XTBResult:
         XTBResult object containing parsed features
     """
     result = XTBResult(smiles=smiles)
-    result.field_status = {name: 'unparsed' for name in XTB_FEATURE_NAMES}
+    result.field_status = {name: 'unparsed' for name in XTB_PARSED_16D_NAMES}
 
     try:
         lines = xtb_output_text.split('\n')
@@ -416,14 +390,11 @@ def _calculate_derived_fields(result: XTBResult) -> None:
         result.charge_range = result.charge_max - result.charge_min
         result.field_status['Charge_Range'] = 'derived'
 
-    # Molecular_Volume_cm3_mol is not available from standard XTB output
-    # This field requires external filling (e.g., from RDKit)
-    result.field_status['Molecular_Volume_cm3_mol'] = 'external_fill_required'
-    result.raw_parsing_notes.append("Molecular_Volume_cm3_mol: external_fill_required (not in standard XTB output)")
+    # Note: Molecular_Volume_cm3_mol is computed separately by RDKit
 
 
 def xtb_result_to_feature_vector(result: XTBResult) -> np.ndarray:
-    """Convert XTBResult to numpy feature vector (17 dimensions)."""
+    """Convert XTBResult to numpy feature vector (16 dimensions)."""
     return np.array([
         result.n_atoms,
         result.n_heavy_atoms,
@@ -440,8 +411,7 @@ def xtb_result_to_feature_vector(result: XTBResult) -> np.ndarray:
         result.charge_max,
         result.charge_mean,
         result.charge_std,
-        result.charge_range,
-        result.molecular_volume_cm3_mol
+        result.charge_range
     ], dtype=np.float32)
 
 
@@ -462,7 +432,7 @@ def extract_features_from_directory(xtb_dir: str, output_path: Optional[str] = N
                 'SMILES': result.smiles,
                 'success': result.success,
                 'error': result.error_message,
-                **{name: getattr(result, _field_name(name)) for name in XTB_FEATURE_NAMES}
+                **{name: getattr(result, _field_name(name)) for name in XTB_PARSED_16D_NAMES}
             }
             for fname, status in result.field_status.items():
                 row[f'{fname}_status'] = status
@@ -494,8 +464,7 @@ def _field_name(feature_name: str) -> str:
         'Charge_Max': 'charge_max',
         'Charge_Mean': 'charge_mean',
         'Charge_STD': 'charge_std',
-        'Charge_Range': 'charge_range',
-        'Molecular_Volume_cm3_mol': 'molecular_volume_cm3_mol'
+        'Charge_Range': 'charge_range'
     }
     return mapping.get(feature_name, feature_name)
 
@@ -508,7 +477,7 @@ def convert_csv_to_pth(input_csv: str, output_pth: str, smiles_list: Optional[Li
         smiles_set = set(smiles_list)
         df = df[df['SMILES'].isin(smiles_set)]
 
-    features = df[XTB_FEATURE_NAMES].values.astype(np.float32)
+    features = df[XTB_PARSED_16D_NAMES].values.astype(np.float32)
     smiles_matched = df['SMILES'].tolist()
 
     features_tensor = torch.tensor(features, dtype=torch.float32)
@@ -516,8 +485,8 @@ def convert_csv_to_pth(input_csv: str, output_pth: str, smiles_list: Optional[Li
     data = {
         'features': features_tensor,
         'smiles': smiles_matched,
-        'feature_names': XTB_FEATURE_NAMES,
-        'note': 'Converted from CSV via xtb_extract'
+        'feature_names': XTB_PARSED_16D_NAMES,
+        'note': 'Converted from CSV via xtb_extract (16D XTB only)'
     }
 
     torch.save(data, output_pth)
@@ -548,8 +517,8 @@ def validate_xtb_pth(pth_path: str) -> Dict[str, Any]:
         if len(features.shape) != 2:
             result['valid'] = False
             result['errors'].append(f"Expected 2D features, got shape {features.shape}")
-        elif features.shape[1] != XTB_FEATURE_DIM:
-            result['warnings'].append(f"Expected {XTB_FEATURE_DIM} features, got {features.shape[1]}")
+        elif features.shape[1] != XTB_PARSED_16D_DIM:
+            result['warnings'].append(f"Expected {XTB_PARSED_16D_DIM} features, got {features.shape[1]}")
 
     if 'smiles' not in data:
         result['valid'] = False
@@ -577,7 +546,7 @@ def compare_features(result1: XTBResult, result2: XTBResult) -> Dict[str, Any]:
         'rel_diff_pct': []
     }
 
-    for fname in XTB_FEATURE_NAMES:
+    for fname in XTB_PARSED_16D_NAMES:
         v1 = getattr(result1, _field_name(fname))
         v2 = getattr(result2, _field_name(fname))
 

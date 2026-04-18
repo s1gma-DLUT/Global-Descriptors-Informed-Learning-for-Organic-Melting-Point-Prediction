@@ -15,6 +15,8 @@ from typing import Optional, Dict, List, Any
 from rdkit import Chem
 from rdkit.Chem import Descriptors
 
+from .schema import RDKIT_EXTRA_1D_NAMES
+
 
 def compute_molecular_volume_cm3_mol(smiles: str) -> Optional[float]:
     """
