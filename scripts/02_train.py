@@ -30,7 +30,7 @@ def main():
     
     # Set up output directory
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-    output_dir = config.get('output_dir', './outputs')
+    output_dir = config.get('outputs_root', './outputs')
     run_name = f"{config['task_name']}_{timestamp}"
     if args.output_tag:
         run_name = f"{run_name}_{args.output_tag}"
@@ -40,7 +40,7 @@ def main():
     legacy_script = os.path.join(os.path.dirname(__file__), 'legacy_main_train.py')
     cmd = [
         sys.executable, legacy_script,
-        '--data_dir', config['data_dir'],
+        '--data_dir', config.get('data_dir', 'data'),
         '--outputs_root', output_dir,
         '--model_name', config['model_name_or_path'],
         '--seed', str(config['seed']),

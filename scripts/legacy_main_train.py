@@ -23,7 +23,6 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from rdkit import Chem, RDLogger
-from rdkit.Chem.Scaffolds import MurckoScaffold
 from sklearn.impute import SimpleImputer
 from sklearn.preprocessing import StandardScaler
 from torch.utils.data import DataLoader, Dataset
@@ -37,9 +36,10 @@ RDLogger.DisableLog('rdApp.*')
 
 @dataclass
 class TrainConfig:
-    data_dir: str = '/home/liutao/pxf/MP_new/data'
-    outputs_root: str = '/home/liutao/pxf/MP_new/outputs'
+    data_dir: str = 'data'
+    outputs_root: str = 'outputs'
     model_name: str = '/home/liutao/pxf/MoLFormer-c3-1.1B'
+    split_dir: str = 'splits/scaffold'
     seed: int = 114514
     n_folds: int = 5
     batch_size: int = 256
@@ -49,8 +49,6 @@ class TrainConfig:
     max_epochs: int = 300
     freeze_bert_epochs: int = 3
     final_tune_epochs: int = 5
-    min_epochs_before_early_stop: int = 0
-    early_stop_patience: int = 0
     bert_unfreeze_layers: int = 4
     bert_encoder_lr: float = 1e-6
     bert_projection_lr: float = 1e-5
@@ -84,15 +82,9 @@ class TrainConfig:
     freeze_main_head_epoch: int = 150
     reg_boost_epoch: int = 250
     reg_boost_factor: float = 1.5
-    multi_gpu_mode: str = 'none'  # choices: none / fold_parallel
-    gpu_ids: str = ''
     device: str = ''
     folds_to_run_list: str = ''
-    fold_parallel_workers: int = 0
     output_tag: str = ''
-    use_frozen_split: bool = False
-    split_dir: str = 'splits/scaffold'
-    split_manifest: str = 'splits/scaffold/split_manifest.csv'
 
 
 class NumpyEncoder(json.JSONEncoder):
@@ -108,11 +100,12 @@ class NumpyEncoder(json.JSONEncoder):
 
 def parse_args() -> TrainConfig:
     parser = argparse.ArgumentParser(
-        description='Clean residual-boosting MoLFormer + D-MPNN + XTB/RDKit training (full-checkpoint only).'
+        description='Frozen-split single-GPU residual-boosting MoLFormer + D-MPNN + XTB/RDKit training.'
     )
     parser.add_argument('--data_dir', type=str, default=TrainConfig.data_dir)
     parser.add_argument('--outputs_root', type=str, default=TrainConfig.outputs_root)
     parser.add_argument('--model_name', type=str, default=TrainConfig.model_name)
+    parser.add_argument('--split_dir', type=str, default=TrainConfig.split_dir)
     parser.add_argument('--seed', type=int, default=TrainConfig.seed)
     parser.add_argument('--n_folds', type=int, default=TrainConfig.n_folds)
     parser.add_argument('--batch_size', type=int, default=TrainConfig.batch_size)
@@ -122,8 +115,6 @@ def parse_args() -> TrainConfig:
     parser.add_argument('--max_epochs', type=int, default=TrainConfig.max_epochs)
     parser.add_argument('--freeze_bert_epochs', type=int, default=TrainConfig.freeze_bert_epochs)
     parser.add_argument('--final_tune_epochs', type=int, default=TrainConfig.final_tune_epochs)
-    parser.add_argument('--min_epochs_before_early_stop', type=int, default=TrainConfig.min_epochs_before_early_stop)
-    parser.add_argument('--early_stop_patience', type=int, default=TrainConfig.early_stop_patience)
     parser.add_argument('--bert_unfreeze_layers', type=int, default=TrainConfig.bert_unfreeze_layers)
     parser.add_argument('--bert_encoder_lr', type=float, default=TrainConfig.bert_encoder_lr)
     parser.add_argument('--bert_projection_lr', type=float, default=TrainConfig.bert_projection_lr)
@@ -154,21 +145,16 @@ def parse_args() -> TrainConfig:
     parser.add_argument('--freeze_main_head_epoch', type=int, default=TrainConfig.freeze_main_head_epoch)
     parser.add_argument('--reg_boost_epoch', type=int, default=TrainConfig.reg_boost_epoch)
     parser.add_argument('--reg_boost_factor', type=float, default=TrainConfig.reg_boost_factor)
-    parser.add_argument('--multi_gpu_mode', type=str, default=TrainConfig.multi_gpu_mode, choices=['none', 'fold_parallel'])
-    parser.add_argument('--gpu_ids', type=str, default=TrainConfig.gpu_ids)
     parser.add_argument('--device', type=str, default=TrainConfig.device)
     parser.add_argument('--folds_to_run_list', type=str, default=TrainConfig.folds_to_run_list)
-    parser.add_argument('--fold_parallel_workers', type=int, default=TrainConfig.fold_parallel_workers)
     parser.add_argument('--output_tag', type=str, default=TrainConfig.output_tag)
-    parser.add_argument('--use_frozen_split', action='store_true', default=TrainConfig.use_frozen_split)
-    parser.add_argument('--split_dir', type=str, default=TrainConfig.split_dir)
-    parser.add_argument('--split_manifest', type=str, default=TrainConfig.split_manifest)
     args = parser.parse_args()
 
     return TrainConfig(
         data_dir=args.data_dir,
         outputs_root=args.outputs_root,
         model_name=args.model_name,
+        split_dir=args.split_dir,
         seed=args.seed,
         n_folds=args.n_folds,
         batch_size=args.batch_size,
@@ -178,8 +164,6 @@ def parse_args() -> TrainConfig:
         max_epochs=args.max_epochs,
         freeze_bert_epochs=args.freeze_bert_epochs,
         final_tune_epochs=args.final_tune_epochs,
-        min_epochs_before_early_stop=args.min_epochs_before_early_stop,
-        early_stop_patience=args.early_stop_patience,
         bert_unfreeze_layers=args.bert_unfreeze_layers,
         bert_encoder_lr=args.bert_encoder_lr,
         bert_projection_lr=args.bert_projection_lr,
@@ -211,15 +195,9 @@ def parse_args() -> TrainConfig:
         freeze_main_head_epoch=args.freeze_main_head_epoch,
         reg_boost_epoch=args.reg_boost_epoch,
         reg_boost_factor=args.reg_boost_factor,
-        multi_gpu_mode=args.multi_gpu_mode,
-        gpu_ids=args.gpu_ids,
         device=args.device,
         folds_to_run_list=args.folds_to_run_list,
-        fold_parallel_workers=args.fold_parallel_workers,
         output_tag=args.output_tag,
-        use_frozen_split=args.use_frozen_split,
-        split_dir=args.split_dir,
-        split_manifest=args.split_manifest,
     )
 
 
@@ -231,14 +209,6 @@ def set_seed(seed: int) -> None:
         torch.cuda.manual_seed_all(seed)
 
 
-def parse_gpu_ids(cfg: TrainConfig) -> List[int]:
-    if cfg.gpu_ids.strip():
-        return [int(x.strip()) for x in cfg.gpu_ids.split(',') if x.strip()]
-    if torch.cuda.is_available():
-        return list(range(torch.cuda.device_count()))
-    return []
-
-
 def parse_selected_folds(cfg: TrainConfig) -> List[int]:
     if cfg.folds_to_run_list.strip():
         parsed = [int(x.strip()) for x in cfg.folds_to_run_list.split(',') if x.strip()]
@@ -246,38 +216,12 @@ def parse_selected_folds(cfg: TrainConfig) -> List[int]:
     return list(range(1, min(cfg.max_folds_to_run, cfg.n_folds) + 1))
 
 
-def infer_device(cfg: TrainConfig, gpu_ids: Optional[Sequence[int]] = None, fallback_index: int = 0) -> torch.device:
+def infer_device(cfg: TrainConfig) -> torch.device:
     if cfg.device:
         return torch.device(cfg.device)
     if torch.cuda.is_available():
-        ids = list(gpu_ids) if gpu_ids else list(range(torch.cuda.device_count()))
-        chosen = ids[min(fallback_index, len(ids) - 1)]
-        return torch.device(f'cuda:{chosen}')
+        return torch.device('cuda:0')
     return torch.device('cpu')
-
-
-def get_run_basename(timestamp: str, cfg: TrainConfig) -> str:
-    base = f'joint_molformer_dmpnn_xtb_residual_boosting_clean_{timestamp}'
-    if cfg.output_tag.strip():
-        base = f'{base}_{cfg.output_tag.strip().replace(" ", "_")}'
-    return base
-
-
-def filter_child_cli_args(argv: Sequence[str]) -> List[str]:
-    skip_with_value = {
-        '--multi_gpu_mode', '--gpu_ids', '--folds_to_run_list', '--device', '--fold_parallel_workers', '--output_tag',
-    }
-    filtered: List[str] = []
-    argv = list(argv)
-    idx = 0
-    while idx < len(argv):
-        arg = argv[idx]
-        if arg in skip_with_value:
-            idx += 2
-            continue
-        filtered.append(arg)
-        idx += 1
-    return filtered
 
 
 def save_json(obj: Dict[str, Any], path: str) -> None:
@@ -310,186 +254,79 @@ def get_git_commit(repo_dir: str) -> str:
         return 'unknown'
 
 
-def launch_fold_parallel(cfg: TrainConfig) -> None:
-    gpu_ids = parse_gpu_ids(cfg)
-    selected_folds = parse_selected_folds(cfg)
-    if len(gpu_ids) <= 1 or len(selected_folds) <= 1:
-        run_training(cfg, infer_device(cfg, gpu_ids))
-        return
+# =========================================================
+# Frozen split utilities
+# =========================================================
+def load_frozen_split_manifest(split_dir: str) -> pd.DataFrame:
+    manifest_file = os.path.join(split_dir, 'split_manifest.csv')
+    if not os.path.exists(manifest_file):
+        raise FileNotFoundError(f'Frozen split manifest not found: {manifest_file}')
+    manifest_df = pd.read_csv(manifest_file)
+    required_cols = {'sample_id', 'smiles', 'assigned_val_fold', 'is_none_scaffold'}
+    missing = required_cols - set(manifest_df.columns)
+    if missing:
+        raise ValueError(f'Frozen split manifest missing columns: {sorted(missing)}')
+    return manifest_df
 
-    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-    launcher_root = os.path.join(cfg.outputs_root, f'fold_parallel_launcher_{timestamp}')
-    subruns_root = os.path.join(launcher_root, 'subruns')
-    os.makedirs(subruns_root, exist_ok=True)
 
-    assignments: Dict[int, List[int]] = {gpu: [] for gpu in gpu_ids}
-    for idx, fold in enumerate(selected_folds):
-        assignments[gpu_ids[idx % len(gpu_ids)]].append(fold)
-    assignments = {gpu: folds for gpu, folds in assignments.items() if folds}
-
-    save_json(
-        {
-            'launcher_root': launcher_root,
-            'subruns_root': subruns_root,
-            'gpu_ids': gpu_ids,
-            'selected_folds': selected_folds,
-            'assignments': assignments,
-        },
-        os.path.join(launcher_root, 'launcher_plan.json'),
-    )
-    print(f'[Launcher] fold-parallel assignments: {json.dumps(assignments, ensure_ascii=False)}', flush=True)
-
-    script_path = os.path.abspath(__file__)
-    base_args = filter_child_cli_args(sys.argv[1:])
-    processes = []
-    for gpu_id, folds in assignments.items():
-        tag = f'gpu{gpu_id}_folds_{"-".join(map(str, folds))}'
-        cmd = [sys.executable, script_path] + base_args + [
-            '--multi_gpu_mode', 'none',
-            '--outputs_root', subruns_root,
-            '--folds_to_run_list', ','.join(map(str, folds)),
-            '--device', 'cuda:0',
-            '--output_tag', tag,
-        ]
-        env = os.environ.copy()
-        env['CUDA_VISIBLE_DEVICES'] = str(gpu_id)
-        print(f'[Launcher] starting GPU {gpu_id}: {" ".join(cmd)}', flush=True)
-        processes.append((gpu_id, folds, subprocess.Popen(cmd, env=env)))
-
-    exit_codes = []
-    for gpu_id, folds, proc in processes:
-        code = proc.wait()
-        exit_codes.append({'gpu_id': gpu_id, 'folds': folds, 'return_code': code})
-    save_json({'children': exit_codes}, os.path.join(launcher_root, 'launcher_exit_codes.json'))
-    failed = [item for item in exit_codes if item['return_code'] != 0]
-    if failed:
-        raise RuntimeError(f'fold_parallel launcher detected failed subprocesses: {failed}')
-
-    child_summaries: List[Dict[str, Any]] = []
-    for root, _, files in os.walk(subruns_root):
-        if 'summary.json' in files:
-            try:
-                with open(os.path.join(root, 'summary.json'), 'r', encoding='utf-8') as f:
-                    child_summaries.append(json.load(f))
-            except Exception:
-                pass
-
-    if child_summaries:
-        all_best: List[float] = []
-        for item in child_summaries:
-            all_best.extend(item.get('fold_best_mae_raw', []))
-        save_json(
-            {
-                'launcher_root': launcher_root,
-                'child_run_count': len(child_summaries),
-                'child_summaries': child_summaries,
-                'aggregated_fold_best_mae_raw': all_best,
-                'mean_best_mae_raw': float(np.mean(all_best)) if all_best else None,
-                'std_best_mae_raw': float(np.std(all_best)) if all_best else None,
-            },
-            os.path.join(launcher_root, 'launcher_summary.json'),
+def validate_frozen_manifest_alignment(smiles_list: Sequence[str], manifest_df: pd.DataFrame) -> None:
+    if len(manifest_df) != len(smiles_list):
+        raise ValueError(
+            f'Frozen split manifest length {len(manifest_df)} does not match aligned sample count {len(smiles_list)}'
         )
-        print(f'[Launcher] aggregated fold best MAE(raw): {all_best}', flush=True)
-        if all_best:
-            print(f'[Launcher] mean={np.mean(all_best):.4f} std={np.std(all_best):.4f}', flush=True)
-    print(f'[Launcher] fold-parallel results saved under: {launcher_root}', flush=True)
+    manifest_sorted = manifest_df.sort_values('sample_id').reset_index(drop=True)
+    expected_ids = list(range(len(smiles_list)))
+    actual_ids = manifest_sorted['sample_id'].tolist()
+    if actual_ids != expected_ids:
+        raise ValueError('Frozen split manifest sample_id is not a complete 0..N-1 sequence.')
+    manifest_smiles = manifest_sorted['smiles'].tolist()
+    if manifest_smiles != list(smiles_list):
+        mismatch_idx = next((i for i, (a, b) in enumerate(zip(manifest_smiles, smiles_list)) if a != b), None)
+        raise ValueError(
+            f'Frozen split manifest smiles do not align with the current aligned dataset order. '
+            f'First mismatch at sample_id={mismatch_idx}: manifest={manifest_smiles[mismatch_idx]!r}, '
+            f'data={smiles_list[mismatch_idx]!r}'
+        )
 
 
-# =========================================================
-# Scaffold split
-# =========================================================
-def get_scaffold(smiles: str) -> Optional[str]:
-    mol = Chem.MolFromSmiles(smiles)
-    if mol is None:
-        return None
-    try:
-        scaffold = MurckoScaffold.MurckoScaffoldSmiles(mol=mol, includeChirality=False)
-        if scaffold is None or scaffold == '':
-            return None
-        return scaffold
-    except Exception:
-        return None
-
-
-def build_balanced_scaffold_folds(smiles_list: Sequence[str], n_folds: int = 5) -> Tuple[List[List[int]], List[int], List[List[int]]]:
-    scaffold_dict: Dict[str, List[int]] = defaultdict(list)
-    none_idx: List[int] = []
-    for idx, smiles in enumerate(smiles_list):
-        scaffold = get_scaffold(smiles)
-        if scaffold is None:
-            none_idx.append(idx)
-        else:
-            scaffold_dict[scaffold].append(idx)
-
-    scaffold_groups = sorted(scaffold_dict.values(), key=len, reverse=True)
-    fold_scaffold_indices: List[List[int]] = [[] for _ in range(n_folds)]
-    fold_sizes = [0] * n_folds
-
-    for group in scaffold_groups:
-        smallest_fold = min(range(n_folds), key=lambda x: fold_sizes[x])
-        fold_scaffold_indices[smallest_fold].extend(group)
-        fold_sizes[smallest_fold] += len(group)
-
-    return fold_scaffold_indices, none_idx, scaffold_groups
-
-
-def load_frozen_fold_indices(split_dir: str, fold: int, total_samples: int) -> Tuple[List[int], List[int], pd.DataFrame]:
-    """
-    Load frozen fold indices from split files.
-    
-    Args:
-        split_dir: Directory containing split files
-        fold: Fold number (1-based)
-        total_samples: Total number of samples in the dataset
-        
-    Returns:
-        Tuple of (train_idx, val_idx, split_manifest)
-    """
-    # Load fold files
+def load_frozen_fold_indices(split_dir: str, fold: int, total_samples: int) -> Tuple[List[int], List[int]]:
     train_file = os.path.join(split_dir, f'fold{fold}_train.csv')
     val_file = os.path.join(split_dir, f'fold{fold}_val.csv')
-    manifest_file = os.path.join(split_dir, 'split_manifest.csv')
-    
-    # Check if files exist
+
     if not os.path.exists(train_file):
-        raise FileNotFoundError(f"Frozen split file not found: {train_file}")
+        raise FileNotFoundError(f'Frozen split file not found: {train_file}')
     if not os.path.exists(val_file):
-        raise FileNotFoundError(f"Frozen split file not found: {val_file}")
-    if not os.path.exists(manifest_file):
-        raise FileNotFoundError(f"Split manifest file not found: {manifest_file}")
-    
-    # Load files
+        raise FileNotFoundError(f'Frozen split file not found: {val_file}')
+
     train_df = pd.read_csv(train_file)
     val_df = pd.read_csv(val_file)
-    manifest_df = pd.read_csv(manifest_file)
-    
-    # Get indices
-    train_idx = train_df['sample_id'].tolist()
-    val_idx = val_df['sample_id'].tolist()
-    
-    # Validate indices
+
+    required_cols = {'sample_id', 'smiles', 'assigned_val_fold', 'is_none_scaffold'}
+    for name, df in [('train', train_df), ('val', val_df)]:
+        missing = required_cols - set(df.columns)
+        if missing:
+            raise ValueError(f'{name} split file for fold {fold} missing columns: {sorted(missing)}')
+
+    train_idx = train_df['sample_id'].astype(int).tolist()
+    val_idx = val_df['sample_id'].astype(int).tolist()
+
     train_idx_set = set(train_idx)
     val_idx_set = set(val_idx)
-    
-    # Check no overlap between train and val
+
     if train_idx_set & val_idx_set:
-        raise ValueError(f"Overlap between train and val indices for fold {fold}")
-    
-    # Check val contains no none-scaffold samples
-    val_is_none_scaffold = val_df['is_none_scaffold'].tolist()
-    if any(val_is_none_scaffold):
-        raise ValueError(f"Val set contains none-scaffold samples for fold {fold}")
-    
-    # Check all indices are within range
+        raise ValueError(f'Overlap between train and val indices for fold {fold}')
+    if any(val_df['is_none_scaffold'].tolist()):
+        raise ValueError(f'Validation set contains none-scaffold samples for fold {fold}')
+
     all_idx = train_idx_set | val_idx_set
     for idx in all_idx:
         if idx < 0 or idx >= total_samples:
-            raise ValueError(f"Sample ID {idx} out of range [0, {total_samples-1}]")
-    
-    return train_idx, val_idx, manifest_df
+            raise ValueError(f'Sample ID {idx} out of range [0, {total_samples - 1}]')
+
+    return train_idx, val_idx
 
 
-# ===========================
+# ===========================# ===========================
 # Molecular graph construction
 # ===========================
 def get_atom_features(atom: Chem.Atom) -> List[float]:
@@ -1502,62 +1339,51 @@ def run_training(cfg: TrainConfig, device: torch.device) -> None:
     targets_raw, xtb_raw, rdkit_raw, smiles_list = load_aligned_multimodal_data(cfg.data_dir)
     total_sample_count = len(smiles_list)
 
-    # Handle split loading
-    if cfg.use_frozen_split:
-        print(f'[{datetime.now().strftime("%Y-%m-%d %H:%M:%S")}] Using frozen scaffold split from {cfg.split_dir}', flush=True)
-        # Load split manifest to get none_idx and other info
-        manifest_file = os.path.join(cfg.split_dir, 'split_manifest.csv')
-        if not os.path.exists(manifest_file):
-            raise FileNotFoundError(f"Split manifest file not found: {manifest_file}")
-        split_manifest = pd.read_csv(manifest_file)
-        none_idx = split_manifest[split_manifest['is_none_scaffold']]['sample_id'].tolist()
-        valid_scaffold_sample_count = total_sample_count - len(none_idx)
-        # Load split summary to get scaffold info
-        summary_file = os.path.join(cfg.split_dir, 'split_summary.json')
-        if os.path.exists(summary_file):
-            with open(summary_file, 'r') as f:
-                split_summary = json.load(f)
-        else:
-            # Estimate scaffold count if summary not available
-            split_summary = {
-                'run_id': run_id,
-                'total_aligned_samples': total_sample_count,
-                'valid_scaffold_samples': valid_scaffold_sample_count,
-                'none_scaffold_samples_train_only': len(none_idx),
-                'unique_valid_scaffolds': len(set(split_manifest['scaffold'].dropna())),
-                'folds_to_run': selected_folds,
-            }
-        split_manifest_lookup = split_manifest.set_index('sample_id', drop=False)
+    split_dir = os.path.abspath(cfg.split_dir)
+    print(f'[{datetime.now().strftime("%Y-%m-%d %H:%M:%S")}] Using frozen scaffold split from {split_dir}', flush=True)
+    split_manifest = load_frozen_split_manifest(split_dir)
+    validate_frozen_manifest_alignment(smiles_list, split_manifest)
+    split_manifest_lookup = split_manifest.set_index('sample_id', drop=False)
+
+    none_idx = split_manifest[split_manifest['is_none_scaffold']]['sample_id'].astype(int).tolist()
+    summary_file = os.path.join(split_dir, 'split_summary.json')
+    if os.path.exists(summary_file):
+        with open(summary_file, 'r', encoding='utf-8') as f:
+            frozen_split_summary = json.load(f)
     else:
-        print(f'[{datetime.now().strftime("%Y-%m-%d %H:%M:%S")}] Building dynamic scaffold split', flush=True)
-        fold_scaffold_indices, none_idx, scaffold_groups = build_balanced_scaffold_folds(smiles_list, n_folds=cfg.n_folds)
-        valid_scaffold_sample_count = sum(len(group) for group in scaffold_groups)
-
-        split_manifest = pd.DataFrame(
-            {
-                'sample_id': np.arange(total_sample_count, dtype=np.int64),
-                'smiles': smiles_list,
-                'scaffold': [get_scaffold(smiles) for smiles in smiles_list],
-            }
-        )
-        assigned_val_fold = np.zeros(total_sample_count, dtype=np.int64)
-        for fold_idx, fold_indices in enumerate(fold_scaffold_indices, start=1):
-            assigned_val_fold[np.asarray(fold_indices, dtype=np.int64)] = fold_idx
-        split_manifest['assigned_val_fold'] = assigned_val_fold
-        split_manifest['is_none_scaffold'] = split_manifest['sample_id'].isin(set(none_idx))
-        split_manifest_lookup = split_manifest.set_index('sample_id', drop=False)
-
-        split_summary = {
-            'run_id': run_id,
-            'total_aligned_samples': total_sample_count,
-            'valid_scaffold_samples': valid_scaffold_sample_count,
-            'none_scaffold_samples_train_only': len(none_idx),
-            'unique_valid_scaffolds': len(scaffold_groups),
-            'fold_valid_scaffold_val_sizes': {f'fold_{i + 1}': len(fold_scaffold_indices[i]) for i in range(cfg.n_folds)},
-            'folds_to_run': selected_folds,
+        fold_val_sizes = {
+            f'fold_{fold}': int((split_manifest['assigned_val_fold'] == fold).sum())
+            for fold in range(1, cfg.n_folds + 1)
         }
-    
-    # Save split info
+        frozen_split_summary = {
+            'total_aligned_samples': total_sample_count,
+            'valid_scaffold_samples': int((~split_manifest['is_none_scaffold']).sum()),
+            'none_scaffold_samples_train_only': len(none_idx),
+            'unique_valid_scaffolds': None,
+            'fold_valid_scaffold_val_sizes': fold_val_sizes,
+            'n_folds': cfg.n_folds,
+        }
+
+    split_summary = {
+        'run_id': run_id,
+        'split_source': 'frozen_scaffold',
+        'split_dir': split_dir,
+        'total_aligned_samples': int(frozen_split_summary.get('total_aligned_samples', total_sample_count)),
+        'valid_scaffold_samples': int(
+            frozen_split_summary.get(
+                'valid_scaffold_samples',
+                int((~split_manifest['is_none_scaffold']).sum()),
+            )
+        ),
+        'none_scaffold_samples_train_only': int(
+            frozen_split_summary.get('none_scaffold_samples_train_only', len(none_idx))
+        ),
+        'unique_valid_scaffolds': frozen_split_summary.get('unique_valid_scaffolds'),
+        'fold_valid_scaffold_val_sizes': frozen_split_summary.get('fold_valid_scaffold_val_sizes', {}),
+        'folds_to_run': selected_folds,
+    }
+    valid_scaffold_sample_count = split_summary['valid_scaffold_samples']
+
     save_json(split_summary, os.path.join(output_dir, 'split_summary.json'))
     save_dataframe(split_manifest, os.path.join(output_dir, 'split_manifest'), index=False)
     print(json.dumps(split_summary, indent=2, ensure_ascii=False), flush=True)
@@ -1565,39 +1391,26 @@ def run_training(cfg: TrainConfig, device: torch.device) -> None:
     tokenizer = AutoTokenizer.from_pretrained(cfg.model_name, trust_remote_code=True)
     collator = JointCollator(tokenizer=tokenizer, max_length=cfg.max_length)
 
-    all_indices = set(range(total_sample_count))
     none_idx_set = set(none_idx)
     all_fold_best_mae: List[float] = []
     all_fold_records: List[Dict[str, Any]] = []
     all_oof_frames: List[pd.DataFrame] = []
 
     for fold in selected_folds:
-        if cfg.use_frozen_split:
-            # Load frozen split indices
-            train_idx, val_idx, _ = load_frozen_fold_indices(cfg.split_dir, fold, total_sample_count)
-            val_idx_set = set(val_idx)
-            # Validate no none-scaffold in val
-            val_is_none_scaffold = split_manifest.loc[val_idx]['is_none_scaffold'].tolist()
-            assert not any(val_is_none_scaffold), 'None-scaffold samples leaked into validation set.'
-            # Validate no overlap
-            assert len(set(train_idx) & val_idx_set) == 0, 'Train/Val overlap detected.'
-            # Log frozen split info
-            print('\n' + '=' * 80, flush=True)
-            print(f'Fold {fold}/{cfg.n_folds} | Split: frozen_scaffold | Train: {len(train_idx)} | Val: {len(val_idx)} | None(train-only): {len(none_idx)}', flush=True)
-            print('=' * 80, flush=True)
-        else:
-            # Use dynamic split
-            fold_zero = fold - 1
-            val_idx = sorted(fold_scaffold_indices[fold_zero])
-            val_idx_set = set(val_idx)
-            train_idx = sorted(list((all_indices - val_idx_set) | none_idx_set))
+        train_idx, val_idx = load_frozen_fold_indices(split_dir, fold, total_sample_count)
+        val_idx_set = set(val_idx)
+        val_is_none_scaffold = split_manifest.loc[val_idx]['is_none_scaffold'].tolist()
+        assert not any(val_is_none_scaffold), 'None-scaffold samples leaked into validation set.'
+        assert len(set(train_idx) & val_idx_set) == 0, 'Train/Val overlap detected.'
+        assert none_idx_set.issubset(set(train_idx)), 'Some none-scaffold samples are missing from the frozen train split.'
 
-            assert len(val_idx_set & none_idx_set) == 0, 'None-scaffold samples leaked into validation set.'
-            assert len(set(train_idx) & val_idx_set) == 0, 'Train/Val overlap detected.'
-
-            print('\n' + '=' * 80, flush=True)
-            print(f'Fold {fold}/{cfg.n_folds} | Split: dynamic_scaffold | Train: {len(train_idx)} | Val: {len(val_idx)} | None(train-only): {len(none_idx)}', flush=True)
-            print('=' * 80, flush=True)
+        print('\n' + '=' * 80, flush=True)
+        print(
+            f'Fold {fold}/{cfg.n_folds} | Split: frozen_scaffold | '
+            f'Train: {len(train_idx)} | Val: {len(val_idx)} | None(train-only): {len(none_idx)}',
+            flush=True,
+        )
+        print('=' * 80, flush=True)
 
         fold_scaler_dir = os.path.join(output_dir, f'scalers_fold{fold}')
         imp_xtb = SimpleImputer(strategy='median')
@@ -1896,8 +1709,7 @@ def run_training(cfg: TrainConfig, device: torch.device) -> None:
         'batch_size': cfg.batch_size,
         'stage2_batch_size': cfg.stage2_batch_size,
         'main_branch_noise_std': cfg.main_branch_noise_std,
-        'multi_gpu_mode': cfg.multi_gpu_mode,
-        'gpu_ids': parse_gpu_ids(cfg),
+        'device': str(device),
     }
     save_json(summary, os.path.join(output_dir, 'summary.json'))
     save_dataframe(pd.DataFrame([summary]), os.path.join(output_dir, 'cv_summary'), index=False)
@@ -1923,8 +1735,7 @@ def run_training(cfg: TrainConfig, device: torch.device) -> None:
             'fusion_lr': cfg.fusion_lr,
             'dropout': cfg.dropout,
             'main_branch_noise_std': cfg.main_branch_noise_std,
-            'multi_gpu_mode': cfg.multi_gpu_mode,
-            'gpu_ids': cfg.gpu_ids,
+                'device': str(device),
             'mean_best_mae_raw': float(np.mean(all_fold_best_mae)),
             'std_best_mae_raw': float(np.std(all_fold_best_mae)),
         },
@@ -1943,10 +1754,7 @@ def run_training(cfg: TrainConfig, device: torch.device) -> None:
 
 def main() -> None:
     cfg = parse_args()
-    if cfg.multi_gpu_mode == 'fold_parallel':
-        launch_fold_parallel(cfg)
-        return
-    run_training(cfg, infer_device(cfg, parse_gpu_ids(cfg)))
+    run_training(cfg, infer_device(cfg))
 
 
 if __name__ == '__main__':
