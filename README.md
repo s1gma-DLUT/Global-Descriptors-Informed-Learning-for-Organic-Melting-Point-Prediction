@@ -1,204 +1,107 @@
-# Single-Component Melting Point Prediction
+# Melting Point Prediction for Single-Component Systems
 
-This repository contains the core code needed to reproduce a multimodal model
-for single-component melting point prediction. The model combines SMILES,
-molecular graph, XTB-derived quantum features, and RDKit descriptors.
+This repository contains the training code for a multimodal melting point
+prediction model. The model uses SMILES text, molecular graphs, XTB features,
+and RDKit descriptors.
 
-## What Is Included
+## Repository Layout
 
 ```text
-single_component_mp_prediction/
-|-- configs/                 Experiment configurations
-|-- data/                    Data placeholders and schema notes
-|-- docs/                    Method, dataset, reproducibility, and schema docs
-|-- scripts/                 Data preparation, training, inference, evaluation
-|-- splits/                  Frozen split indices when available
-|-- src/                     Reusable preprocessing and utility code
-|-- environment.yml          Conda environment
-|-- requirements.txt         Pip dependency list
-|-- LICENSE                  MIT license
-`-- README.md
+configs/      Training configurations
+data/         Local data placeholder; data files are not committed
+docs/         Short notes on data, model, and reproduction
+scripts/      Training and preprocessing entry points
+splits/       Frozen split indices
+src/          Reusable preprocessing utilities
 ```
 
-Large data files, model checkpoints, XTB job outputs, and generated reports are
-not tracked by git. See [data/README.md](data/README.md) for the expected file
-layout.
+The main training entry point is:
 
-## Model Overview
-
-The main architecture uses four information sources:
-
-- MoLFormer encoder for SMILES sequence representations.
-- D-MPNN encoder for molecular graph representations.
-- XTB feature bundle for electronic, charge, and dipole properties.
-- RDKit descriptors for molecular volume and auxiliary descriptors.
-
-The main training implementation currently lives in
-[`scripts/legacy_main_train.py`](scripts/legacy_main_train.py). The cleaner
-entry point [`scripts/02_train.py`](scripts/02_train.py) loads a YAML config and
-dispatches to that training implementation.
+```bash
+python scripts/02_train.py --config configs/main_scaffold.yaml
+```
 
 ## Environment
 
-### Conda
+Create the conda environment:
 
 ```bash
 conda env create -f environment.yml
 conda activate single_component_mp
 ```
 
-### Pip
+Or install with pip:
 
 ```bash
 pip install -r requirements.txt
 ```
 
-XTB itself is usually easiest to install from conda-forge:
+XTB is required only if you need to regenerate XTB features. The training script
+expects precomputed feature files.
 
-```bash
-conda create -n xtb -c conda-forge xtb
-conda run -n xtb xtb --version
-```
+## Data
 
-The scripts default to `conda run -n xtb xtb` where possible. If your XTB
-environment has another name, pass the relevant command-line option or edit the
-config for your local machine.
-
-## Required Data Layout
-
-Place private or regenerated data under `data/` without committing it:
+Place the required files locally:
 
 ```text
-data/
-|-- raw/
-|   |-- multimodal_train.csv
-|   `-- multimodal_test.csv
-|-- processed/
-|   |-- XTB_train.pth
-|   |-- XTB_test.pth
-|   |-- rdkit3d_train.npy
-|   `-- rdkit3d_test.npy
-`-- external/
-    `-- new_molecules.csv
+data/raw/multimodal_train.csv
+data/raw/multimodal_test.csv
+data/processed/XTB_train.pth
+data/processed/XTB_test.pth
+data/processed/rdkit3d_train.npy
+data/processed/rdkit3d_test.npy
 ```
 
-Expected CSV columns are:
+The raw CSV files should contain:
 
-- `SMILES`: molecule string.
-- `MP`: melting point target, normally in degrees Celsius.
+- `SMILES`
+- `MP`
 
-The XTB feature bundle is a 17-dimensional mixed-source feature file:
+Large data files and checkpoints are intentionally ignored by git.
 
-- 16 dimensions parsed or derived from XTB output.
-- 1 dimension, `Molecular_Volume_cm3_mol`, computed with RDKit.
+## Model Path
 
-See [docs/xtb_feature_schema.md](docs/xtb_feature_schema.md) for the exact
-schema.
+Set `model_name_or_path` in the config to a local MoLFormer checkpoint or a
+compatible Hugging Face model id. You can also export:
 
-## Reproduction Workflow
+```bash
+export MOLFORMER_MODEL=/path/to/MoLFormer
+```
 
-1. Prepare the environment.
+On Windows PowerShell:
 
-   ```bash
-   conda env create -f environment.yml
-   conda activate single_component_mp
-   ```
+```powershell
+$env:MOLFORMER_MODEL="C:\path\to\MoLFormer"
+```
 
-2. Put the raw CSV and feature files in `data/raw/` and `data/processed/`.
+## Training
 
-3. Build or verify frozen splits.
+Main scaffold split:
 
-   ```bash
-   python scripts/01_build_scaffold_split.py
-   ```
+```bash
+python scripts/02_train.py --config configs/main_scaffold.yaml
+```
 
-4. Train the main scaffold model.
+Random split baseline:
 
-   ```bash
-   python scripts/02_train.py --config configs/main_scaffold.yaml
-   ```
+```bash
+python scripts/02_train.py --config configs/main_random.yaml
+```
 
-5. Evaluate or run inference with the produced checkpoint directory.
+The training wrapper loads the YAML config and calls
+`scripts/legacy_main_train.py`, which contains the model and training loop.
 
-   ```bash
-   python scripts/inference_test_set.py \
-     --run_root outputs/YOUR_RUN \
-     --test_csv data/raw/multimodal_test.csv \
-     --xtb_path data/processed/XTB_test.pth \
-     --rdkit_path data/processed/rdkit3d_test.npy \
-     --output_csv outputs/test_predictions.csv
-   ```
+## Configs
 
-## Computing XTB Features For New Molecules
+- `configs/main_scaffold.yaml`: main frozen scaffold split training.
+- `configs/main_random.yaml`: random split baseline.
+- `configs/ablation_no_xtb.yaml`: ablation without XTB features.
+- `configs/ablation_no_dmpnn.yaml`: ablation without D-MPNN.
 
-1. Create `data/external/new_molecules.csv`.
+## Notes
 
-   ```csv
-   SMILES
-   CCO
-   c1ccccc1
-   ```
-
-2. Identify molecules missing from an existing feature bundle.
-
-   ```bash
-   python scripts/00b_compute_xtb_features.py \
-     --input data/external/new_molecules.csv \
-     --existing_xtb data/processed/XTB_train.pth \
-     --output_dir data/external/xtb_jobs \
-     --step identify
-   ```
-
-3. Generate XTB input files and a batch script.
-
-   ```bash
-   python scripts/00b_compute_xtb_features.py \
-     --input data/external/new_molecules.csv \
-     --existing_xtb data/processed/XTB_train.pth \
-     --output_dir data/external/xtb_jobs \
-     --step generate_cmds
-   ```
-
-4. Run the generated XTB jobs on a machine with XTB installed.
-
-   ```bash
-   bash data/external/xtb_jobs/run_xtb_batch.sh
-   ```
-
-5. Parse XTB output, compute RDKit volume, and merge to the 17D bundle.
-
-   ```bash
-   python -m src.preprocessing.xtb_extract \
-     --xtb_dir data/external/xtb_jobs/outputs \
-     --output_csv data/external/xtb_parsed/extracted_features.csv
-
-   python scripts/00c_compute_rdkit_volume.py \
-     --input_smiles data/external/xtb_jobs/missing_molecules.csv \
-     --output_csv data/external/rdkit_volumes.csv
-
-   python scripts/00d_merge_feature_bundle.py \
-     --xtb_csv data/external/xtb_parsed/extracted_features.csv \
-     --volume_csv data/external/rdkit_volumes.csv \
-     --output_pth data/external/merged_features/XTB_merged.pth \
-     --existing_pth data/processed/XTB_train.pth
-   ```
-
-## Configuration Notes
-
-The YAML configs use relative data paths. Set `model_name_or_path` to either a
-local MoLFormer checkpoint directory or a Hugging Face model identifier that is
-compatible with your checkpoints.
-
-Because large artifacts are intentionally ignored, a clean clone needs data and
-checkpoint files supplied separately before full reproduction can run.
-
-## Repository Hygiene
-
-- Do not commit raw data, processed feature tensors, checkpoints, logs, or
-  generated reports.
-- Commit frozen split files and lightweight manifests needed to reproduce
-  reported numbers.
-- Record the git commit, config file, data version, and checkpoint directory for
-  every reported experiment.
-
-See [docs/reproducibility.md](docs/reproducibility.md) for more detail.
+- Keep raw data, feature tensors, checkpoints, logs, and generated outputs out
+  of git.
+- Frozen split indices under `splits/canonical_v2_scaffold/` are tracked for
+  reproducible training.
+- See `docs/` for compact details about the model and data schema.

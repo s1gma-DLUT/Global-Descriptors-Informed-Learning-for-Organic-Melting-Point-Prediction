@@ -1,2 +1,0 @@
-experiment_id,status,task_name,split_type,config,entry_point,git_commit,output_dir,feature_bundle,metrics,notes
-example,pending,single_component_mp_scaffold,scaffold,configs/main_scaffold.yaml,scripts/02_train.py,REPLACE_WITH_COMMIT,outputs/REPLACE_WITH_RUN,data/processed/XTB_train.pth,,Template row; replace with real runs
