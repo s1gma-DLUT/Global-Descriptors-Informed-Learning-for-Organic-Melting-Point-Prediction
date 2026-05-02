@@ -1,26 +1,26 @@
 # Data
 
-This directory is a placeholder for local data. Large files are not committed.
+This directory stores CSV data and local feature files.
 
-Expected files:
+Included CSV:
 
 ```text
-data/raw/multimodal_train.csv
-data/raw/multimodal_test.csv
+data/raw/cleaned/data_set.csv
+```
+
+CSV files under `data/raw/` are tracked when they contain plain tabular data.
+They should contain:
+
+- `SMILES`
+- `MP`
+
+Training requires local feature files such as:
+
+```text
 data/processed/XTB_train.pth
 data/processed/XTB_test.pth
 data/processed/rdkit3d_train.npy
 data/processed/rdkit3d_test.npy
 ```
 
-CSV files should contain:
-
-- `SMILES`
-- `MP`
-
-`XTB_*.pth` files are expected to contain a 17-dimensional feature matrix and
-aligned SMILES strings. `rdkit3d_*.npy` files should be aligned with the same
-training/test molecules used by the training script.
-
-Do not commit raw data, processed feature tensors, checkpoints, or generated
-outputs.
+Do not commit processed feature tensors, checkpoints, or generated outputs.

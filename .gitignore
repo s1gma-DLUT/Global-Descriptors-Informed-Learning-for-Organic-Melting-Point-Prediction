@@ -5,7 +5,10 @@ reports/tables/
 reports/paper_notes/
 
 # Data
-/data/raw/*
+/data/raw/**
+!/data/raw/
+!/data/raw/**/
+!/data/raw/**/*.csv
 /data/processed/*
 /data/external/xtb_jobs/
 /data/external/xtb_parsed/
@@ -100,5 +103,6 @@ scripts/train_random_split_no_3d.py
 *.npz
 *.pkl
 *.joblib
+!data/raw/**/*.csv
 !/splits/
 !/splits/**

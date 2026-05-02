@@ -3,15 +3,10 @@
 The training code expects single-component molecules with experimental melting
 points.
 
-## Required Files
+## Included CSV
 
 ```text
-data/raw/multimodal_train.csv
-data/raw/multimodal_test.csv
-data/processed/XTB_train.pth
-data/processed/XTB_test.pth
-data/processed/rdkit3d_train.npy
-data/processed/rdkit3d_test.npy
+data/raw/cleaned/data_set.csv
 ```
 
 Raw CSV columns:
@@ -20,6 +15,8 @@ Raw CSV columns:
 - `MP`: melting point target.
 
 ## Feature Files
+
+Training requires precomputed feature files placed locally under `data/`.
 
 `XTB_train.pth` and `XTB_test.pth` contain 17 physicochemical features per
 molecule. The first 16 are parsed or derived from XTB output, and the final

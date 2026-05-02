@@ -8,7 +8,7 @@ and RDKit descriptors.
 
 ```text
 configs/      Training configurations
-data/         Local data placeholder; data files are not committed
+data/         CSV data and local feature-file placeholders
 docs/         Short notes on data, model, and reproduction
 scripts/      Training and preprocessing entry points
 splits/       Frozen split indices
@@ -41,23 +41,27 @@ expects precomputed feature files.
 
 ## Data
 
-Place the required files locally:
+The cleaned CSV dataset is included at:
 
 ```text
-data/raw/multimodal_train.csv
-data/raw/multimodal_test.csv
-data/processed/XTB_train.pth
-data/processed/XTB_test.pth
-data/processed/rdkit3d_train.npy
-data/processed/rdkit3d_test.npy
+data/raw/cleaned/data_set.csv
 ```
 
-The raw CSV files should contain:
+It contains:
 
 - `SMILES`
 - `MP`
 
-Large data files and checkpoints are intentionally ignored by git.
+Training also requires precomputed feature files:
+
+```text
+data/raw/multimodal_train.csv
+data/processed/XTB_train.pth
+data/processed/rdkit3d_train.npy
+```
+
+CSV files under `data/raw/` are tracked. Feature tensors and checkpoints are
+ignored by git.
 
 ## Model Path
 
@@ -100,8 +104,7 @@ The training wrapper loads the YAML config and calls
 
 ## Notes
 
-- Keep raw data, feature tensors, checkpoints, logs, and generated outputs out
-  of git.
+- Keep feature tensors, checkpoints, logs, and generated outputs out of git.
 - Frozen split indices under `splits/canonical_v2_scaffold/` are tracked for
   reproducible training.
 - See `docs/` for compact details about the model and data schema.
