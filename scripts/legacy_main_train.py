@@ -3,11 +3,7 @@ os.environ.setdefault('HF_ENDPOINT', 'https://hf-mirror.com')
 os.environ.setdefault('TOKENIZERS_PARALLELISM', 'false')
 
 import argparse
-import json
-import math
 import random
-import shutil
-import subprocess
 import sys
 import warnings
 from collections import defaultdict
@@ -16,7 +12,6 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import joblib
-import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import torch
@@ -88,17 +83,6 @@ class TrainConfig:
     output_tag: str = ''
 
 
-class NumpyEncoder(json.JSONEncoder):
-    def default(self, obj: Any) -> Any:
-        if isinstance(obj, (np.integer, np.int32, np.int64)):
-            return int(obj)
-        if isinstance(obj, (np.floating, np.float32, np.float64)):
-            return float(obj)
-        if isinstance(obj, np.ndarray):
-            return obj.tolist()
-        return super().default(obj)
-
-
 def parse_args_to_config() -> TrainConfig:
     """Parse command-line overrides for TrainConfig fields."""
     cfg = TrainConfig()
@@ -160,40 +144,6 @@ def get_run_basename(timestamp: str, cfg: TrainConfig) -> str:
     return '_'.join(parts)
 
 
-def get_git_commit(repo_dir: str) -> str:
-    """Get current git commit hash."""
-    try:
-        result = subprocess.run(
-            ['git', 'rev-parse', 'HEAD'],
-            cwd=repo_dir,
-            capture_output=True,
-            text=True,
-            check=True
-        )
-        return result.stdout.strip()
-    except Exception:
-        return 'unknown'
-
-
-def load_frozen_split_manifest(split_dir: str) -> pd.DataFrame:
-    """Load frozen split manifest."""
-    manifest_file = os.path.join(split_dir, 'split_manifest.csv')
-    if not os.path.exists(manifest_file):
-        raise FileNotFoundError(f"Split manifest file not found: {manifest_file}")
-    return pd.read_csv(manifest_file)
-
-
-def validate_frozen_manifest_alignment(smiles_list: List[str], split_manifest: pd.DataFrame) -> None:
-    """Validate that split manifest aligns with current dataset."""
-    if len(smiles_list) != len(split_manifest):
-        raise ValueError(f"Mismatch: dataset size {len(smiles_list)} != manifest size {len(split_manifest)}")
-    # Check sample IDs are consecutive and start from 0
-    expected_ids = list(range(len(smiles_list)))
-    actual_ids = sorted(split_manifest['sample_id'].astype(int).tolist())
-    if expected_ids != actual_ids:
-        raise ValueError(f"Sample IDs in manifest do not match expected range [0, {len(smiles_list)-1}]")
-
-
 def parse_selected_folds(cfg: TrainConfig) -> List[int]:
     if cfg.folds_to_run_list.strip():
         parsed = [int(x.strip()) for x in cfg.folds_to_run_list.split(',') if x.strip()]
@@ -209,127 +159,23 @@ def infer_device(cfg: TrainConfig) -> torch.device:
     return torch.device('cpu')
 
 
-def save_json(obj: Dict[str, Any], path: str) -> None:
-    with open(path, 'w', encoding='utf-8') as f:
-        json.dump(obj, f, indent=2, ensure_ascii=False, cls=NumpyEncoder)
-
-
-def save_dataframe(df: pd.DataFrame, path_stem: str, index: bool = False) -> str:
-    parquet_path = f'{path_stem}.parquet'
-    try:
-        df.to_parquet(parquet_path, index=index)
-        return parquet_path
-    except Exception:
-        csv_path = f'{path_stem}.csv'
-        df.to_csv(csv_path, index=index)
-        return csv_path
-
-
-def append_run_summary(record: Dict[str, Any], outputs_root: str) -> str:
-    path = os.path.join(outputs_root, 'runs_summary.csv')
-    df = pd.DataFrame([record])
-    df.to_csv(path, mode='a', header=not os.path.exists(path), index=False)
-    return path
-
-
-def get_git_commit(repo_dir: str) -> str:
-    try:
-        return subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=repo_dir, stderr=subprocess.DEVNULL).decode().strip()
-    except Exception:
-        return 'unknown'
-
-
-# =========================================================
-# Split utilities - supports both frozen scaffold and random split
-# =========================================================
-def load_frozen_split_manifest(split_dir: str) -> pd.DataFrame:
-    manifest_file = os.path.join(split_dir, 'split_manifest.csv')
-    if not os.path.exists(manifest_file):
-        raise FileNotFoundError(f'Frozen split manifest not found: {manifest_file}')
-    manifest_df = pd.read_csv(manifest_file)
-    required_cols = {'sample_id', 'smiles', 'assigned_val_fold', 'is_none_scaffold'}
-    missing = required_cols - set(manifest_df.columns)
-    if missing:
-        raise ValueError(f'Frozen split manifest missing columns: {sorted(missing)}')
-    return manifest_df
-
-
-def validate_frozen_manifest_alignment(smiles_list: Sequence[str], manifest_df: pd.DataFrame) -> None:
-    if len(manifest_df) != len(smiles_list):
-        raise ValueError(
-            f'Frozen split manifest length {len(manifest_df)} does not match aligned sample count {len(smiles_list)}'
-        )
-    manifest_sorted = manifest_df.sort_values('sample_id').reset_index(drop=True)
-    expected_ids = list(range(len(smiles_list)))
-    actual_ids = manifest_sorted['sample_id'].tolist()
-    if actual_ids != expected_ids:
-        raise ValueError('Frozen split manifest sample_id is not a complete 0..N-1 sequence.')
-    manifest_smiles = manifest_sorted['smiles'].tolist()
-    if manifest_smiles != list(smiles_list):
-        mismatch_idx = next((i for i, (a, b) in enumerate(zip(manifest_smiles, smiles_list)) if a != b), None)
-        raise ValueError(
-            f'Frozen split manifest smiles do not align with the current aligned dataset order. '
-            f'First mismatch at sample_id={mismatch_idx}: manifest={manifest_smiles[mismatch_idx]!r}, '
-            f'data={smiles_list[mismatch_idx]!r}'
-        )
-
-
 def load_frozen_fold_indices(split_dir: str, fold: int, total_samples: int) -> Tuple[List[int], List[int]]:
-    train_file = os.path.join(split_dir, f'fold{fold}_train.csv')
-    val_file = os.path.join(split_dir, f'fold{fold}_val.csv')
-
-    if not os.path.exists(train_file):
-        raise FileNotFoundError(f'Frozen split file not found: {train_file}')
+    val_file = os.path.join(split_dir, f'fold_{fold}_val_idx.npy')
     if not os.path.exists(val_file):
-        raise FileNotFoundError(f'Frozen split file not found: {val_file}')
-
-    train_df = pd.read_csv(train_file)
-    val_df = pd.read_csv(val_file)
-
-    required_cols = {'sample_id', 'smiles', 'assigned_val_fold', 'is_none_scaffold'}
-    for name, df in [('train', train_df), ('val', val_df)]:
-        missing = required_cols - set(df.columns)
-        if missing:
-            raise ValueError(f'{name} split file for fold {fold} missing columns: {sorted(missing)}')
-
-    train_idx = train_df['sample_id'].astype(int).tolist()
-    val_idx = val_df['sample_id'].astype(int).tolist()
-
-    train_idx_set = set(train_idx)
+        raise FileNotFoundError(f'Frozen validation index file not found: {val_file}')
+    val_idx = sorted(np.load(val_file).astype(int).tolist())
+    if any(idx < 0 or idx >= total_samples for idx in val_idx):
+        raise ValueError(f'Validation indices for fold {fold} are out of range.')
     val_idx_set = set(val_idx)
-
-    if train_idx_set & val_idx_set:
-        raise ValueError(f'Overlap between train and val indices for fold {fold}')
-    if any(val_df['is_none_scaffold'].tolist()):
-        raise ValueError(f'Validation set contains none-scaffold samples for fold {fold}')
-
-    all_idx = train_idx_set | val_idx_set
-    for idx in all_idx:
-        if idx < 0 or idx >= total_samples:
-            raise ValueError(f'Sample ID {idx} out of range [0, {total_samples - 1}]')
-
+    train_idx = [idx for idx in range(total_samples) if idx not in val_idx_set]
     return train_idx, val_idx
 
 
-# =========================================================
-# Random split utilities
-# =========================================================
 def build_random_folds(n_samples: int, n_folds: int = 5, seed: int = 114514) -> List[List[int]]:
-    """Build random K-fold splits.
-
-    Args:
-        n_samples: Total number of samples
-        n_folds: Number of folds
-        seed: Random seed for reproducibility
-
-    Returns:
-        List of fold indices, where each fold is a list of sample indices
-    """
     rng = np.random.RandomState(seed)
     indices = np.arange(n_samples)
     rng.shuffle(indices)
 
-    # Calculate fold sizes (as even as possible)
     fold_sizes = np.full(n_folds, n_samples // n_folds)
     fold_sizes[:n_samples % n_folds] += 1
 
@@ -342,65 +188,16 @@ def build_random_folds(n_samples: int, n_folds: int = 5, seed: int = 114514) -> 
     return fold_indices
 
 
-def generate_random_split_manifest(
-    smiles_list: Sequence[str],
-    fold_indices: List[List[int]]
-) -> pd.DataFrame:
-    """Generate split manifest for random split.
-
-    Args:
-        smiles_list: List of SMILES strings
-        fold_indices: List of fold sample indices
-
-    Returns:
-        Split manifest dataframe
-    """
-    n_samples = len(smiles_list)
-
-    # Create sample to fold mapping
-    sample_to_fold = {}
-    for fold_idx, indices in enumerate(fold_indices, start=1):
-        for idx in indices:
-            sample_to_fold[idx] = fold_idx
-
-    # Build manifest (compatible with frozen split format)
-    manifest_rows = []
-    for i in range(n_samples):
-        manifest_rows.append({
-            'sample_id': i,
-            'smiles': smiles_list[i],
-            'assigned_val_fold': sample_to_fold.get(i, 0),
-            'is_none_scaffold': False,  # Random split doesn't have none-scaffold concept
-        })
-
-    return pd.DataFrame(manifest_rows)
-
-
 def get_random_fold_indices(fold_indices: List[List[int]], fold: int, total_samples: int) -> Tuple[List[int], List[int]]:
-    """Get train/val indices for a specific fold in random split.
-
-    Args:
-        fold_indices: List of fold sample indices
-        fold: Fold number (1-based)
-        total_samples: Total number of samples
-
-    Returns:
-        Tuple of (train_idx, val_idx)
-    """
     fold_zero = fold - 1
     val_idx = sorted(fold_indices[fold_zero])
     val_idx_set = set(val_idx)
-
-    # Train is everything except val
     all_indices = set(range(total_samples))
     train_idx = sorted(list(all_indices - val_idx_set))
 
     return train_idx, val_idx
 
 
-# ===========================# ===========================
-# Molecular graph construction
-# ===========================
 def get_atom_features(atom: Chem.Atom) -> List[float]:
     return [
         float(atom.GetAtomicNum()),
@@ -467,14 +264,20 @@ def smiles_to_pyg_data(smiles: str, use_dummy_on_failure: bool = True) -> Option
         return make_dummy_graph() if use_dummy_on_failure else None
 
 
-# =========================
-# Data loading and datasets
-# =========================
 def load_aligned_multimodal_data(data_dir: str) -> Tuple[np.ndarray, np.ndarray, np.ndarray, List[str]]:
     print(f'[{datetime.now().strftime("%Y-%m-%d %H:%M:%S")}] Loading joint data from {data_dir}...', flush=True)
-    train_csv = os.path.join(data_dir, 'raw', 'multimodal_train.csv')
-    rdkit_path = os.path.join(data_dir, 'processed', 'rdkit3d_train.npy')
-    xtb_path = os.path.join(data_dir, 'processed', 'XTB_train.pth')
+    train_csv = first_existing_path([
+        os.path.join(data_dir, 'raw', 'multimodal_train.csv'),
+        os.path.join(data_dir, 'raw', 'cleaned', 'data_set.csv'),
+    ])
+    rdkit_path = first_existing_path([
+        os.path.join(data_dir, 'processed', 'rdkit3d_train.npy'),
+        os.path.join(data_dir, 'raw', 'cleaned', 'rdkit3d_train.npy'),
+    ])
+    xtb_path = first_existing_path([
+        os.path.join(data_dir, 'processed', 'XTB_train.pth'),
+        os.path.join(data_dir, 'raw', 'cleaned', 'XTB_train.pth'),
+    ])
 
     train_df = pd.read_csv(train_csv)
     rdkit_features = np.load(rdkit_path)
@@ -515,6 +318,13 @@ def load_aligned_multimodal_data(data_dir: str) -> Tuple[np.ndarray, np.ndarray,
     print(f'Skipped rows | missing target/smiles: {skipped_missing_target} | missing XTB: {skipped_missing_xtb}', flush=True)
     print(f'XTB shape: {xtb.shape} | RDKit shape: {rdkit.shape}', flush=True)
     return targets, xtb, rdkit, aligned_smiles
+
+
+def first_existing_path(paths: Sequence[str]) -> str:
+    for path in paths:
+        if os.path.exists(path):
+            return path
+    raise FileNotFoundError(f'None of these paths exists: {paths}')
 
 
 class JointMolGraphTextDataset(Dataset):
@@ -584,9 +394,6 @@ class JointCollator:
         }
 
 
-# ========================
-# MoLFormer encoder wrapper
-# ========================
 def _load_transformer(model_name: str) -> AutoModel:
     try:
         return AutoModel.from_pretrained(model_name, deterministic_eval=True, trust_remote_code=True)
@@ -1223,65 +1030,6 @@ def validate(
     }
 
 
-def build_prediction_frame(
-    run_id: str,
-    fold: int,
-    selected_epoch: int,
-    split_manifest_lookup: pd.DataFrame,
-    val_stats: Dict[str, Any],
-) -> pd.DataFrame:
-    sample_ids = [int(x) for x in np.asarray(val_stats['sample_ids']).tolist()]
-    meta = split_manifest_lookup.loc[sample_ids].reset_index(drop=True).copy()
-    if len(meta) != len(val_stats['pred_raw']):
-        raise ValueError('Prediction rows do not match manifest rows.')
-
-    smiles_from_loader = list(val_stats.get('smiles', []))
-    if smiles_from_loader and smiles_from_loader != meta['smiles'].tolist():
-        meta['smiles_loader'] = smiles_from_loader
-
-    pred_df = meta.copy()
-    pred_df['run_id'] = run_id
-    pred_df['fold'] = fold
-    pred_df['selected_epoch'] = selected_epoch
-    pred_df['split'] = 'val'
-    pred_df['target_std'] = np.asarray(val_stats['target_std'], dtype=np.float32)
-    pred_df['pred_std'] = np.asarray(val_stats['pred_std'], dtype=np.float32)
-    pred_df['target_raw'] = np.asarray(val_stats['target_raw'], dtype=np.float32)
-    pred_df['pred_raw'] = np.asarray(val_stats['pred_raw'], dtype=np.float32)
-    pred_df['error_raw'] = pred_df['pred_raw'] - pred_df['target_raw']
-    pred_df['abs_error'] = pred_df['error_raw'].abs()
-    pred_df['sq_error'] = pred_df['error_raw'] ** 2
-    pred_df['main_pred_std'] = np.asarray(val_stats['main_pred_std'], dtype=np.float32)
-    pred_df['bias_pred_std'] = np.asarray(val_stats['bias_pred_std'], dtype=np.float32)
-    pred_df['w_xtb_abs_mean'] = np.asarray(val_stats['w_xtb_abs_mean'], dtype=np.float32)
-    pred_df['z_main_l2'] = np.asarray(val_stats['z_main_l2'], dtype=np.float32)
-    pred_df['h_xtb_l2'] = np.asarray(val_stats['h_xtb_l2'], dtype=np.float32)
-    return pred_df
-
-
-def build_error_bin_summary(oof_df: pd.DataFrame, bin_width: int = 50) -> pd.DataFrame:
-    if oof_df.empty:
-        return pd.DataFrame(columns=['target_bin', 'count', 'mae', 'rmse', 'mean_target_raw', 'mean_pred_raw'])
-
-    max_target = float(oof_df['target_raw'].max())
-    upper = max(bin_width, int(math.ceil(max(max_target, 0.0) / bin_width)) * bin_width)
-    bins = [-np.inf, 0.0] + [float(edge) for edge in range(bin_width, upper + bin_width, bin_width)] + [np.inf]
-    labels = ['<0'] + [f'{left}-{right}' for left, right in zip(range(0, upper, bin_width), range(bin_width, upper + bin_width, bin_width))] + [f'>={upper}']
-
-    working = oof_df.copy()
-    working['target_bin'] = pd.cut(working['target_raw'], bins=bins, labels=labels, right=False, include_lowest=True)
-    grouped = working.groupby('target_bin', observed=False)
-    summary = grouped.agg(
-        count=('sample_id', 'size'),
-        mae=('abs_error', 'mean'),
-        mean_sq_error=('sq_error', 'mean'),
-        mean_target_raw=('target_raw', 'mean'),
-        mean_pred_raw=('pred_raw', 'mean'),
-    ).reset_index()
-    summary['rmse'] = np.sqrt(summary['mean_sq_error'])
-    return summary.drop(columns=['mean_sq_error'])
-
-
 def save_best_checkpoint(
     model: JointMolFormerDMPNNXTBModel,
     output_dir: str,
@@ -1306,86 +1054,7 @@ def save_best_checkpoint(
     if optimizer is not None:
         checkpoint_data['optimizer_state_dict'] = optimizer.state_dict()
     torch.save(checkpoint_data, full_path)
-    stable_path = os.path.join(output_dir, f'best_fold{fold}.pt')
-    shutil.copy2(full_path, stable_path)
     return full_path
-
-
-def plot_fold_curves(history: Dict[str, List[float]], fold: int, output_dir: str) -> None:
-    epochs = history['epoch']
-
-    plt.figure(figsize=(8, 5))
-    plt.plot(epochs, history['train_loss'], label='Train Loss')
-    plt.plot(epochs, history['val_loss'], label='Val Loss')
-    plt.xlabel('Epoch')
-    plt.ylabel('Loss')
-    plt.title(f'Fold {fold} Loss Curve')
-    plt.legend()
-    plt.tight_layout()
-    plt.savefig(os.path.join(output_dir, f'fold{fold}_loss_curve.png'), dpi=200)
-    plt.close()
-
-    plt.figure(figsize=(8, 5))
-    plt.plot(epochs, history['val_mae_raw'], label='Val MAE(raw)')
-    plt.xlabel('Epoch')
-    plt.ylabel('MAE(raw)')
-    plt.title(f'Fold {fold} Val MAE(raw)')
-    plt.legend()
-    plt.tight_layout()
-    plt.savefig(os.path.join(output_dir, f'fold{fold}_val_mae_raw_curve.png'), dpi=200)
-    plt.close()
-
-    plt.figure(figsize=(8, 5))
-    plt.plot(epochs, history['train_mae_std'], label='Train MAE(std)')
-    plt.plot(epochs, history['val_mae_std'], label='Val MAE(std)')
-    plt.xlabel('Epoch')
-    plt.ylabel('MAE(std)')
-    plt.title(f'Fold {fold} MAE(std) Curve')
-    plt.legend()
-    plt.tight_layout()
-    plt.savefig(os.path.join(output_dir, f'fold{fold}_mae_std_curve.png'), dpi=200)
-    plt.close()
-
-    plt.figure(figsize=(8, 5))
-    plt.plot(epochs, history['train_z_main_abs'], label='Train |z_main|')
-    plt.plot(epochs, history['val_z_main_abs'], label='Val |z_main|')
-    plt.plot(epochs, history['train_h_xtb_abs'], label='Train |h_xtb|')
-    plt.plot(epochs, history['val_h_xtb_abs'], label='Val |h_xtb|')
-    plt.xlabel('Epoch')
-    plt.ylabel('Average absolute magnitude')
-    plt.title(f'Fold {fold} Hidden Magnitude Curve')
-    plt.legend()
-    plt.tight_layout()
-    plt.savefig(os.path.join(output_dir, f'fold{fold}_hidden_magnitude_curve.png'), dpi=200)
-    plt.close()
-
-    plt.figure(figsize=(8, 5))
-    plt.plot(epochs, history['train_main_pred_abs'], label='Train |main_pred|')
-    plt.plot(epochs, history['val_main_pred_abs'], label='Val |main_pred|')
-    plt.plot(epochs, history['train_bias_pred_abs'], label='Train |b_pred|')
-    plt.plot(epochs, history['val_bias_pred_abs'], label='Val |b_pred|')
-    plt.plot(epochs, history['train_w_xtb_abs'], label='Train |w_xtb|')
-    plt.plot(epochs, history['val_w_xtb_abs'], label='Val |w_xtb|')
-    plt.xlabel('Epoch')
-    plt.ylabel('Average absolute prediction')
-    plt.title(f'Fold {fold} Residual Boosting Curve')
-    plt.legend()
-    plt.tight_layout()
-    plt.savefig(os.path.join(output_dir, f'fold{fold}_residual_boosting_curve.png'), dpi=200)
-    plt.close()
-
-
-def plot_summary(all_fold_best_mae: Sequence[float], output_dir: str, selected_folds: Sequence[int]) -> None:
-    plt.figure(figsize=(7, 5))
-    folds = np.asarray(selected_folds)
-    plt.plot(folds, all_fold_best_mae, marker='o')
-    plt.xticks(folds)
-    plt.xlabel('Fold')
-    plt.ylabel('Best Val MAE(raw)')
-    plt.title('Best Validation MAE(raw) by Fold')
-    plt.tight_layout()
-    plt.savefig(os.path.join(output_dir, 'fold_best_mae_summary.png'), dpi=200)
-    plt.close()
 
 
 def run_training(cfg: TrainConfig, device: torch.device) -> None:
@@ -1397,105 +1066,29 @@ def run_training(cfg: TrainConfig, device: torch.device) -> None:
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
     run_basename = get_run_basename(timestamp, cfg)
     output_dir = os.path.join(cfg.outputs_root, run_basename)
-    run_id = run_basename
     os.makedirs(output_dir, exist_ok=True)
-    shutil.copy(os.path.abspath(__file__), os.path.join(output_dir, os.path.basename(__file__)))
     print(f'[{datetime.now().strftime("%Y-%m-%d %H:%M:%S")}] Clean residual boosting training script started', flush=True)
     print(f'Output dir: {output_dir}', flush=True)
     print(f'Using device: {device}', flush=True)
-    save_json(asdict(cfg), os.path.join(output_dir, 'config.json'))
-
-    repo_dir = os.path.dirname(os.path.abspath(__file__))
-    git_commit = get_git_commit(repo_dir)
 
     targets_raw, xtb_raw, rdkit_raw, smiles_list = load_aligned_multimodal_data(cfg.data_dir)
     total_sample_count = len(smiles_list)
 
-    # Determine split type
     if cfg.use_random_split:
-        # Random K-fold split
         print(f'[{datetime.now().strftime("%Y-%m-%d %H:%M:%S")}] Using random K-fold split with seed {cfg.seed}', flush=True)
         fold_indices_list = build_random_folds(total_sample_count, n_folds=cfg.n_folds, seed=cfg.seed)
-        split_manifest = generate_random_split_manifest(smiles_list, fold_indices_list)
-        split_manifest_lookup = split_manifest.set_index('sample_id', drop=False)
         none_idx = []
-
-        fold_val_sizes = {
-            f'fold_{fold}': len(fold_indices_list[fold - 1])
-            for fold in range(1, cfg.n_folds + 1)
-        }
-
-        split_summary = {
-            'run_id': run_id,
-            'split_source': 'random_kfold',
-            'split_type': 'random_kfold',
-            'seed': cfg.seed,
-            'total_aligned_samples': total_sample_count,
-            'n_folds': cfg.n_folds,
-            'fold_val_sizes': fold_val_sizes,
-            'folds_to_run': selected_folds,
-        }
-
-        print(json.dumps(split_summary, indent=2, ensure_ascii=False), flush=True)
     else:
-        # Frozen scaffold split
         split_dir = os.path.abspath(cfg.split_dir)
         print(f'[{datetime.now().strftime("%Y-%m-%d %H:%M:%S")}] Using frozen scaffold split from {split_dir}', flush=True)
-        split_manifest = load_frozen_split_manifest(split_dir)
-        validate_frozen_manifest_alignment(smiles_list, split_manifest)
-        split_manifest_lookup = split_manifest.set_index('sample_id', drop=False)
-
-        none_idx = split_manifest[split_manifest['is_none_scaffold']]['sample_id'].astype(int).tolist()
-        summary_file = os.path.join(split_dir, 'split_summary.json')
-        if os.path.exists(summary_file):
-            with open(summary_file, 'r', encoding='utf-8') as f:
-                frozen_split_summary = json.load(f)
-        else:
-            fold_val_sizes = {
-                f'fold_{fold}': int((split_manifest['assigned_val_fold'] == fold).sum())
-                for fold in range(1, cfg.n_folds + 1)
-            }
-            frozen_split_summary = {
-                'total_aligned_samples': total_sample_count,
-                'valid_scaffold_samples': int((~split_manifest['is_none_scaffold']).sum()),
-                'none_scaffold_samples_train_only': len(none_idx),
-                'unique_valid_scaffolds': None,
-                'fold_valid_scaffold_val_sizes': fold_val_sizes,
-                'n_folds': cfg.n_folds,
-            }
-
-        split_summary = {
-            'run_id': run_id,
-            'split_source': 'frozen_scaffold',
-            'split_dir': split_dir,
-            'total_aligned_samples': int(frozen_split_summary.get('total_aligned_samples', total_sample_count)),
-            'valid_scaffold_samples': int(
-                frozen_split_summary.get(
-                    'valid_scaffold_samples',
-                    int((~split_manifest['is_none_scaffold']).sum()),
-                )
-            ),
-            'none_scaffold_samples_train_only': int(
-                frozen_split_summary.get('none_scaffold_samples_train_only', len(none_idx))
-            ),
-            'unique_valid_scaffolds': frozen_split_summary.get('unique_valid_scaffolds'),
-            'fold_valid_scaffold_val_sizes': frozen_split_summary.get('fold_valid_scaffold_val_sizes', {}),
-            'folds_to_run': selected_folds,
-        }
-        valid_scaffold_sample_count = split_summary['valid_scaffold_samples']
-
-        print(json.dumps(split_summary, indent=2, ensure_ascii=False), flush=True)
-
-    save_json(split_summary, os.path.join(output_dir, 'split_summary.json'))
-    save_dataframe(split_manifest, os.path.join(output_dir, 'split_manifest'), index=False)
+        none_file = os.path.join(split_dir, 'none_idx.npy')
+        none_idx = np.load(none_file).astype(int).tolist() if os.path.exists(none_file) else []
 
     tokenizer = AutoTokenizer.from_pretrained(cfg.model_name, trust_remote_code=True)
     collator = JointCollator(tokenizer=tokenizer, max_length=cfg.max_length)
 
     none_idx_set = set(none_idx)
     all_fold_best_mae: List[float] = []
-    all_fold_records: List[Dict[str, Any]] = []
-    all_oof_frames: List[pd.DataFrame] = []
 
     for fold in selected_folds:
         if cfg.use_random_split:
@@ -1510,8 +1103,7 @@ def run_training(cfg: TrainConfig, device: torch.device) -> None:
         val_idx_set = set(val_idx)
 
         if not cfg.use_random_split:
-            val_is_none_scaffold = split_manifest.loc[val_idx]['is_none_scaffold'].tolist()
-            assert not any(val_is_none_scaffold), 'None-scaffold samples leaked into validation set.'
+            assert not (none_idx_set & val_idx_set), 'None-scaffold samples leaked into validation set.'
             assert none_idx_set.issubset(set(train_idx)), 'Some none-scaffold samples are missing from the frozen train split.'
 
         assert len(set(train_idx) & val_idx_set) == 0, 'Train/Val overlap detected.'
@@ -1600,45 +1192,7 @@ def run_training(cfg: TrainConfig, device: torch.device) -> None:
 
         best_mae = float('inf')
         best_epoch = -1
-        best_stage = ''
-        best_lrs: Dict[str, float] = {}
-        best_common_wd = None
-        best_xtb_wd = None
         best_checkpoint_path = ''
-        best_val_prediction_frame: Optional[pd.DataFrame] = None
-
-        history: Dict[str, List[Any]] = {
-            'run_id': [],
-            'fold': [],
-            'epoch': [],
-            'stage': [],
-            'train_loss': [],
-            'val_loss': [],
-            'train_mae_std': [],
-            'val_mae_std': [],
-            'val_mae_raw': [],
-            'best_so_far_val_mae_raw': [],
-            'train_z_main_abs': [],
-            'val_z_main_abs': [],
-            'train_h_xtb_abs': [],
-            'val_h_xtb_abs': [],
-            'train_w_xtb_abs': [],
-            'val_w_xtb_abs': [],
-            'train_main_pred_abs': [],
-            'val_main_pred_abs': [],
-            'train_bias_pred_abs': [],
-            'val_bias_pred_abs': [],
-            'train_pred_abs': [],
-            'val_pred_abs': [],
-            'batch_size': [],
-            'bert_encoder_lr': [],
-            'bert_projection_lr': [],
-            'dmpnn_lr': [],
-            'fusion_lr': [],
-            'xtb_lr': [],
-            'common_weight_decay': [],
-            'xtb_weight_decay': [],
-        }
 
         for epoch in range(1, cfg.max_epochs + 1):
             stage = apply_epoch_stage(model, optimizer, epoch, cfg)
@@ -1677,69 +1231,10 @@ def run_training(cfg: TrainConfig, device: torch.device) -> None:
             common_wd = next(g['weight_decay'] for g in optimizer.param_groups if g['group_name'] == 'common_fusion')
             xtb_wd = next(g['weight_decay'] for g in optimizer.param_groups if g['group_name'] == 'xtb_encoder')
 
-            history['run_id'].append(run_id)
-            history['fold'].append(fold)
-            history['epoch'].append(epoch)
-            history['stage'].append(stage)
-            history['train_loss'].append(train_stats['loss'])
-            history['val_loss'].append(val_stats['loss'])
-            history['train_mae_std'].append(train_stats['mae_std'])
-            history['val_mae_std'].append(val_stats['mae_std'])
-            history['val_mae_raw'].append(val_stats['mae_raw'])
-            history['best_so_far_val_mae_raw'].append(min(best_mae, float(val_stats['mae_raw'])))
-            history['train_z_main_abs'].append(train_stats['z_main_abs'])
-            history['val_z_main_abs'].append(val_stats['z_main_abs'])
-            history['train_h_xtb_abs'].append(train_stats['h_xtb_abs'])
-            history['val_h_xtb_abs'].append(val_stats['h_xtb_abs'])
-            history['train_w_xtb_abs'].append(train_stats['w_xtb_abs'])
-            history['val_w_xtb_abs'].append(val_stats['w_xtb_abs'])
-            history['train_main_pred_abs'].append(train_stats['main_pred_abs'])
-            history['val_main_pred_abs'].append(val_stats['main_pred_abs'])
-            history['train_bias_pred_abs'].append(train_stats['bias_pred_abs'])
-            history['val_bias_pred_abs'].append(val_stats['bias_pred_abs'])
-            history['train_pred_abs'].append(train_stats['pred_abs'])
-            history['val_pred_abs'].append(val_stats['pred_abs'])
-            history['batch_size'].append(current_batch_size)
-            history['bert_encoder_lr'].append(lrs['bert_encoder'])
-            history['bert_projection_lr'].append(lrs['bert_projection'])
-            history['dmpnn_lr'].append(lrs['dmpnn'])
-            history['fusion_lr'].append(lrs['common_fusion'])
-            history['xtb_lr'].append(lrs['xtb_encoder'])
-            history['common_weight_decay'].append(common_wd)
-            history['xtb_weight_decay'].append(xtb_wd)
-
             if val_stats['mae_raw'] < best_mae:
                 best_mae = float(val_stats['mae_raw'])
                 best_epoch = epoch
-                best_stage = stage
-                best_lrs = dict(lrs)
-                best_common_wd = common_wd
-                best_xtb_wd = xtb_wd
-                best_val_prediction_frame = build_prediction_frame(
-                    run_id=run_id,
-                    fold=fold,
-                    selected_epoch=epoch,
-                    split_manifest_lookup=split_manifest_lookup,
-                    val_stats=val_stats,
-                )
                 best_checkpoint_path = save_best_checkpoint(model, output_dir, fold, epoch, best_mae, cfg, scaler_t, optimizer)
-                save_json(
-                    {
-                        'run_id': run_id,
-                        'fold': fold,
-                        'best_epoch': best_epoch,
-                        'best_val_mae_raw': best_mae,
-                        'stage_at_best': stage,
-                        'checkpoint_path': best_checkpoint_path,
-                        'checkpoint_type': 'full_model',
-                        'lrs_at_best': lrs,
-                        'weight_decay_at_best': {
-                            'common_weight_decay': common_wd,
-                            'xtb_weight_decay': xtb_wd,
-                        },
-                    },
-                    os.path.join(output_dir, f'best_fold{fold}_metrics.json'),
-                )
 
             print(
                 f'Fold {fold} | Epoch {epoch:03d} | Stage: {stage} | '
@@ -1758,109 +1253,17 @@ def run_training(cfg: TrainConfig, device: torch.device) -> None:
                 flush=True,
             )
 
-        history_df = pd.DataFrame(history)
-        history_df.to_csv(os.path.join(output_dir, f'fold{fold}_history.csv'), index=False)
-        history_df.to_csv(os.path.join(output_dir, f'fold{fold}_epoch_metrics.csv'), index=False)
-        plot_fold_curves(history, fold, output_dir)
         all_fold_best_mae.append(best_mae)
 
-        if best_val_prediction_frame is not None:
-            save_dataframe(best_val_prediction_frame, os.path.join(output_dir, f'fold{fold}_oof_predictions'), index=False)
-            fold_error_bins = build_error_bin_summary(best_val_prediction_frame)
-            save_dataframe(fold_error_bins, os.path.join(output_dir, f'fold{fold}_error_bins'), index=False)
-            all_oof_frames.append(best_val_prediction_frame)
-
-        fold_record = {
-            'run_id': run_id,
-            'fold': fold,
-            'train_size': len(train_idx),
-            'val_size': len(val_idx),
-            'best_epoch': best_epoch,
-            'best_stage': best_stage,
-            'best_val_mae_raw': best_mae,
-            'best_checkpoint_path': best_checkpoint_path,
-            'best_common_weight_decay': best_common_wd,
-            'best_xtb_weight_decay': best_xtb_wd,
-            'best_bert_encoder_lr': best_lrs.get('bert_encoder'),
-            'best_bert_projection_lr': best_lrs.get('bert_projection'),
-            'best_dmpnn_lr': best_lrs.get('dmpnn'),
-            'best_common_lr': best_lrs.get('common_fusion'),
-            'best_xtb_lr': best_lrs.get('xtb_encoder'),
-        }
-        all_fold_records.append(fold_record)
-        save_json(fold_record, os.path.join(output_dir, f'fold{fold}_summary.json'))
-        print(f'Fold {fold} Best Val MAE(raw): {best_mae:.4f} at epoch {best_epoch}', flush=True)
+        print(
+            f'Fold {fold} Best Val MAE(raw): {best_mae:.4f} at epoch {best_epoch} | '
+            f'checkpoint: {best_checkpoint_path}',
+            flush=True,
+        )
 
         del model
         if device.type == 'cuda':
             torch.cuda.empty_cache()
-
-    fold_summary_df = pd.DataFrame(all_fold_records)
-    if not fold_summary_df.empty:
-        save_dataframe(fold_summary_df, os.path.join(output_dir, 'fold_summary'), index=False)
-
-    cv_oof_df = pd.concat(all_oof_frames, ignore_index=True) if all_oof_frames else pd.DataFrame()
-    if not cv_oof_df.empty:
-        save_dataframe(cv_oof_df, os.path.join(output_dir, 'cv_oof_predictions'), index=False)
-        cv_error_bins_df = build_error_bin_summary(cv_oof_df)
-        save_dataframe(cv_error_bins_df, os.path.join(output_dir, 'cv_error_bins'), index=False)
-
-    # Build summary based on split type
-    summary: Dict[str, Any] = {
-        'run_id': run_id,
-        'git_commit': git_commit,
-        'output_dir': output_dir,
-        'checkpoint_policy': 'full_model_only',
-        'split_type': 'random_kfold' if cfg.use_random_split else 'frozen_scaffold',
-        'fold_best_mae_raw': all_fold_best_mae,
-        'mean_best_mae_raw': float(np.mean(all_fold_best_mae)),
-        'std_best_mae_raw': float(np.std(all_fold_best_mae)),
-        'folds_ran': len(selected_folds),
-        'folds_requested': selected_folds,
-        'total_aligned_samples': total_sample_count,
-        'batch_size': cfg.batch_size,
-        'stage2_batch_size': cfg.stage2_batch_size,
-        'main_branch_noise_std': cfg.main_branch_noise_std,
-        'device': str(device),
-    }
-
-    # Add split-specific fields
-    if cfg.use_random_split:
-        summary['seed'] = cfg.seed
-    else:
-        summary['valid_scaffold_samples'] = valid_scaffold_sample_count
-        summary['none_scaffold_samples_train_only'] = len(none_idx)
-    save_json(summary, os.path.join(output_dir, 'summary.json'))
-    save_dataframe(pd.DataFrame([summary]), os.path.join(output_dir, 'cv_summary'), index=False)
-    append_run_summary(
-        {
-            'run_id': run_id,
-            'timestamp': timestamp,
-            'git_commit': git_commit,
-            'output_dir': output_dir,
-            'model_name': cfg.model_name,
-            'seed': cfg.seed,
-            'n_folds': cfg.n_folds,
-            'folds_ran': len(selected_folds),
-            'folds_requested': ','.join(map(str, selected_folds)),
-            'batch_size': cfg.batch_size,
-            'stage2_batch_size': cfg.stage2_batch_size,
-            'max_epochs': cfg.max_epochs,
-            'freeze_bert_epochs': cfg.freeze_bert_epochs,
-            'final_tune_epochs': cfg.final_tune_epochs,
-            'bert_encoder_lr': cfg.bert_encoder_lr,
-            'bert_projection_lr': cfg.bert_projection_lr,
-            'dmpnn_lr': cfg.dmpnn_lr,
-            'fusion_lr': cfg.fusion_lr,
-            'dropout': cfg.dropout,
-            'main_branch_noise_std': cfg.main_branch_noise_std,
-                'device': str(device),
-            'mean_best_mae_raw': float(np.mean(all_fold_best_mae)),
-            'std_best_mae_raw': float(np.std(all_fold_best_mae)),
-        },
-        cfg.outputs_root,
-    )
-    plot_summary(all_fold_best_mae, output_dir, selected_folds)
 
     print('\n========== Clean Residual Boosting Summary ==========', flush=True)
     for fold, mae in zip(selected_folds, all_fold_best_mae):

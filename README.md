@@ -55,9 +55,8 @@ It contains:
 Training also requires precomputed feature files:
 
 ```text
-data/raw/multimodal_train.csv
-data/processed/XTB_train.pth
-data/processed/rdkit3d_train.npy
+data/raw/cleaned/XTB_train.pth
+data/raw/cleaned/rdkit3d_train.npy
 ```
 
 CSV files under `data/raw/` are tracked. Feature tensors and checkpoints are

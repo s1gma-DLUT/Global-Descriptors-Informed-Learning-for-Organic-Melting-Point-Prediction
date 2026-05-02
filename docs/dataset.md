@@ -17,6 +17,14 @@ Raw CSV columns:
 ## Feature Files
 
 Training requires precomputed feature files placed locally under `data/`.
+The default local layout is:
+
+```text
+data/raw/cleaned/XTB_train.pth
+data/raw/cleaned/XTB_test.pth
+data/raw/cleaned/rdkit3d_train.npy
+data/raw/cleaned/rdkit3d_test.npy
+```
 
 `XTB_train.pth` and `XTB_test.pth` contain 17 physicochemical features per
 molecule. The first 16 are parsed or derived from XTB output, and the final

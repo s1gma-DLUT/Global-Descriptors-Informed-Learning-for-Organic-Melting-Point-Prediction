@@ -17,7 +17,7 @@ conda activate single_component_mp
 python scripts/02_train.py --config configs/main_scaffold.yaml
 ```
 
-Before training, place the required feature files under `data/processed/`, and
+Before training, place the required feature files under `data/raw/cleaned/`, and
 set `model_name_or_path` or `MOLFORMER_MODEL`.
 
 ## Tracked Splits

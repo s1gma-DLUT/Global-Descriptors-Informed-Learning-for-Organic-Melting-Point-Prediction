@@ -17,10 +17,10 @@ They should contain:
 Training requires local feature files such as:
 
 ```text
-data/processed/XTB_train.pth
-data/processed/XTB_test.pth
-data/processed/rdkit3d_train.npy
-data/processed/rdkit3d_test.npy
+data/raw/cleaned/XTB_train.pth
+data/raw/cleaned/XTB_test.pth
+data/raw/cleaned/rdkit3d_train.npy
+data/raw/cleaned/rdkit3d_test.npy
 ```
 
 Do not commit processed feature tensors, checkpoints, or generated outputs.
