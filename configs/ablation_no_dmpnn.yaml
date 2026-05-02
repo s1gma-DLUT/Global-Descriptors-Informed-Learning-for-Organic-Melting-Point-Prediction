@@ -10,7 +10,7 @@ freeze_bert_epochs: 3
 final_tune_epochs: 5
 
 # Model settings
-model_name_or_path: "/home/liutao/pxf/MoLFormer-c3-1.1B"
+model_name_or_path: "PATH_OR_HF_ID_TO_MOLFORMER"
 
 # Data paths
 data_dir: "./data/processed"
@@ -56,9 +56,9 @@ clip_grad_norm: 1.0
 cache_graphs: true
 
 # Multi-GPU settings
-multi_gpu_mode: "fold_parallel"
-gpu_ids: "0,1,2,3,4"
-device: "cuda:0"
+multi_gpu_mode: "none"
+gpu_ids: ""
+device: ""
 
 # Notes
 notes: "Ablation study without D-MPNN features, using MoLFormer + XTB + RDKit"

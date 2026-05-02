@@ -1,5 +1,8 @@
 # Outputs
 outputs/
+reports/figures/
+reports/tables/
+reports/paper_notes/
 
 # Data
 /data/raw/*
@@ -7,26 +10,37 @@ outputs/
 /data/external/xtb_jobs/
 /data/external/xtb_parsed/
 /data/external/merged_features/
-
-# Reports
-reports/tables/
+/data/external/*.csv
+!/data/README.md
+!/data/**/.gitkeep
 
 # Models
 *.pt
 *.pth
 *.ckpt
+*.safetensors
 
 # Cache
 cache/
 *.cache
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
 
 # Logs
 *.log
 logs/
+wandb/
+mlruns/
 
 # Python
 __pycache__/
 *.pyc
+*.pyo
+*.pyd
+build/
+dist/
+*.egg-info/
 
 # IDE
 .vscode/
@@ -36,6 +50,7 @@ __pycache__/
 .env
 .venv/
 env/
+venv/
 
 # OS
 .DS_Store
@@ -45,6 +60,8 @@ Thumbs.db
 *.tmp
 *.temp
 *.swp
+*.bak
+*.orig
 
 # XTB temporary files
 .xtb*
@@ -58,7 +75,30 @@ wbo/
 # Legacy
 scripts/legacy/*_outputs/
 
+# Local experiment scratch scripts retained outside the open-source release
+generate_mp_predictions_fixed.py
+inference_val_scatter.py
+scripts/PREDICT_README.md
+scripts/compute_xtb_gfn1_gfn2.py
+scripts/inference_test_set.py
+scripts/legacy_main_train_bert_proj_only.py
+scripts/legacy_main_train_mlp_fusion.py
+scripts/legacy_main_train_no_projection.py
+scripts/mp_final_seed516_bs512_1024.py
+scripts/predict_mp_fold1.py
+scripts/replay_fold_val_check.py
+scripts/resume_train.py
+scripts/scaffold_simple_mlp_head_ablation.py
+scripts/train_random_split.py
+scripts/train_random_split_no_3d.py
+
 # Large files
 *.zip
 *.tar.gz
 *.h5
+*.npy
+*.npz
+*.pkl
+*.joblib
+!/splits/
+!/splits/**

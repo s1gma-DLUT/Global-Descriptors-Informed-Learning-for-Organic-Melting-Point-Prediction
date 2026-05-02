@@ -11,7 +11,7 @@ import subprocess
 import sys
 import warnings
 from collections import defaultdict
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, fields
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
@@ -38,8 +38,9 @@ RDLogger.DisableLog('rdApp.*')
 class TrainConfig:
     data_dir: str = 'data'
     outputs_root: str = 'outputs'
-    model_name: str = '/home/liutao/pxf/MoLFormer-c3-1.1B'
+    model_name: str = 'PATH_OR_HF_ID_TO_MOLFORMER'
     split_dir: str = 'splits/scaffold'
+    use_random_split: bool = False  # If True, use random K-fold instead of frozen scaffold split
     seed: int = 114514
     n_folds: int = 5
     batch_size: int = 256
@@ -98,6 +99,43 @@ class NumpyEncoder(json.JSONEncoder):
         return super().default(obj)
 
 
+def parse_args_to_config() -> TrainConfig:
+    """Parse command-line overrides for TrainConfig fields."""
+    cfg = TrainConfig()
+    parser = argparse.ArgumentParser(description='Train multimodal melting point model')
+    parser.add_argument('--use_frozen_split', action='store_true', help='Use frozen scaffold splits')
+
+    field_map = {field.name: field for field in fields(TrainConfig)}
+    for name, field in field_map.items():
+        if name == 'use_random_split':
+            parser.add_argument(f'--{name}', action='store_true')
+        elif isinstance(getattr(cfg, name), bool):
+            parser.add_argument(f'--{name}', type=lambda x: str(x).lower() in {'1', 'true', 'yes'})
+        else:
+            parser.add_argument(f'--{name}', type=type(getattr(cfg, name)))
+
+    args, unknown = parser.parse_known_args()
+    if unknown:
+        print(f'[WARN] Ignoring unsupported arguments: {unknown}', flush=True)
+
+    for name in field_map:
+        value = getattr(args, name, None)
+        if value is not None:
+            setattr(cfg, name, value)
+
+    if args.use_frozen_split:
+        cfg.use_random_split = False
+
+    if 'PATH_OR_HF_ID_TO_MOLFORMER' in cfg.model_name:
+        cfg.model_name = os.environ.get('MOLFORMER_MODEL', cfg.model_name)
+    if 'PATH_OR_HF_ID_TO_MOLFORMER' in cfg.model_name:
+        raise ValueError(
+            'Set --model_name, set model_name_or_path in the YAML config, '
+            'or export MOLFORMER_MODEL.'
+        )
+    return cfg
+
+
 def set_seed(seed: int) -> None:
     random.seed(seed)
     np.random.seed(seed)
@@ -108,9 +146,10 @@ def set_seed(seed: int) -> None:
 
 def get_run_basename(timestamp: str, cfg: TrainConfig) -> str:
     """Generate run basename from timestamp and config."""
+    split_name = 'random' if cfg.use_random_split else 'frozen_scaffold'
     parts = [
         'mp',
-        'frozen_scaffold',
+        split_name,
         f'fold{cfg.n_folds}',
         f'bs{cfg.batch_size}',
         f'seed{cfg.seed}',
@@ -201,7 +240,7 @@ def get_git_commit(repo_dir: str) -> str:
 
 
 # =========================================================
-# Frozen split utilities
+# Split utilities - supports both frozen scaffold and random split
 # =========================================================
 def load_frozen_split_manifest(split_dir: str) -> pd.DataFrame:
     manifest_file = os.path.join(split_dir, 'split_manifest.csv')
@@ -268,6 +307,93 @@ def load_frozen_fold_indices(split_dir: str, fold: int, total_samples: int) -> T
     for idx in all_idx:
         if idx < 0 or idx >= total_samples:
             raise ValueError(f'Sample ID {idx} out of range [0, {total_samples - 1}]')
+
+    return train_idx, val_idx
+
+
+# =========================================================
+# Random split utilities
+# =========================================================
+def build_random_folds(n_samples: int, n_folds: int = 5, seed: int = 114514) -> List[List[int]]:
+    """Build random K-fold splits.
+
+    Args:
+        n_samples: Total number of samples
+        n_folds: Number of folds
+        seed: Random seed for reproducibility
+
+    Returns:
+        List of fold indices, where each fold is a list of sample indices
+    """
+    rng = np.random.RandomState(seed)
+    indices = np.arange(n_samples)
+    rng.shuffle(indices)
+
+    # Calculate fold sizes (as even as possible)
+    fold_sizes = np.full(n_folds, n_samples // n_folds)
+    fold_sizes[:n_samples % n_folds] += 1
+
+    fold_indices: List[List[int]] = []
+    start = 0
+    for fold_size in fold_sizes:
+        fold_indices.append(indices[start:start + fold_size].tolist())
+        start += fold_size
+
+    return fold_indices
+
+
+def generate_random_split_manifest(
+    smiles_list: Sequence[str],
+    fold_indices: List[List[int]]
+) -> pd.DataFrame:
+    """Generate split manifest for random split.
+
+    Args:
+        smiles_list: List of SMILES strings
+        fold_indices: List of fold sample indices
+
+    Returns:
+        Split manifest dataframe
+    """
+    n_samples = len(smiles_list)
+
+    # Create sample to fold mapping
+    sample_to_fold = {}
+    for fold_idx, indices in enumerate(fold_indices, start=1):
+        for idx in indices:
+            sample_to_fold[idx] = fold_idx
+
+    # Build manifest (compatible with frozen split format)
+    manifest_rows = []
+    for i in range(n_samples):
+        manifest_rows.append({
+            'sample_id': i,
+            'smiles': smiles_list[i],
+            'assigned_val_fold': sample_to_fold.get(i, 0),
+            'is_none_scaffold': False,  # Random split doesn't have none-scaffold concept
+        })
+
+    return pd.DataFrame(manifest_rows)
+
+
+def get_random_fold_indices(fold_indices: List[List[int]], fold: int, total_samples: int) -> Tuple[List[int], List[int]]:
+    """Get train/val indices for a specific fold in random split.
+
+    Args:
+        fold_indices: List of fold sample indices
+        fold: Fold number (1-based)
+        total_samples: Total number of samples
+
+    Returns:
+        Tuple of (train_idx, val_idx)
+    """
+    fold_zero = fold - 1
+    val_idx = sorted(fold_indices[fold_zero])
+    val_idx_set = set(val_idx)
+
+    # Train is everything except val
+    all_indices = set(range(total_samples))
+    train_idx = sorted(list(all_indices - val_idx_set))
 
     return train_idx, val_idx
 
@@ -1285,54 +1411,83 @@ def run_training(cfg: TrainConfig, device: torch.device) -> None:
     targets_raw, xtb_raw, rdkit_raw, smiles_list = load_aligned_multimodal_data(cfg.data_dir)
     total_sample_count = len(smiles_list)
 
-    split_dir = os.path.abspath(cfg.split_dir)
-    print(f'[{datetime.now().strftime("%Y-%m-%d %H:%M:%S")}] Using frozen scaffold split from {split_dir}', flush=True)
-    split_manifest = load_frozen_split_manifest(split_dir)
-    validate_frozen_manifest_alignment(smiles_list, split_manifest)
-    split_manifest_lookup = split_manifest.set_index('sample_id', drop=False)
+    # Determine split type
+    if cfg.use_random_split:
+        # Random K-fold split
+        print(f'[{datetime.now().strftime("%Y-%m-%d %H:%M:%S")}] Using random K-fold split with seed {cfg.seed}', flush=True)
+        fold_indices_list = build_random_folds(total_sample_count, n_folds=cfg.n_folds, seed=cfg.seed)
+        split_manifest = generate_random_split_manifest(smiles_list, fold_indices_list)
+        split_manifest_lookup = split_manifest.set_index('sample_id', drop=False)
+        none_idx = []
 
-    none_idx = split_manifest[split_manifest['is_none_scaffold']]['sample_id'].astype(int).tolist()
-    summary_file = os.path.join(split_dir, 'split_summary.json')
-    if os.path.exists(summary_file):
-        with open(summary_file, 'r', encoding='utf-8') as f:
-            frozen_split_summary = json.load(f)
-    else:
         fold_val_sizes = {
-            f'fold_{fold}': int((split_manifest['assigned_val_fold'] == fold).sum())
+            f'fold_{fold}': len(fold_indices_list[fold - 1])
             for fold in range(1, cfg.n_folds + 1)
         }
-        frozen_split_summary = {
+
+        split_summary = {
+            'run_id': run_id,
+            'split_source': 'random_kfold',
+            'split_type': 'random_kfold',
+            'seed': cfg.seed,
             'total_aligned_samples': total_sample_count,
-            'valid_scaffold_samples': int((~split_manifest['is_none_scaffold']).sum()),
-            'none_scaffold_samples_train_only': len(none_idx),
-            'unique_valid_scaffolds': None,
-            'fold_valid_scaffold_val_sizes': fold_val_sizes,
             'n_folds': cfg.n_folds,
+            'fold_val_sizes': fold_val_sizes,
+            'folds_to_run': selected_folds,
         }
 
-    split_summary = {
-        'run_id': run_id,
-        'split_source': 'frozen_scaffold',
-        'split_dir': split_dir,
-        'total_aligned_samples': int(frozen_split_summary.get('total_aligned_samples', total_sample_count)),
-        'valid_scaffold_samples': int(
-            frozen_split_summary.get(
-                'valid_scaffold_samples',
-                int((~split_manifest['is_none_scaffold']).sum()),
-            )
-        ),
-        'none_scaffold_samples_train_only': int(
-            frozen_split_summary.get('none_scaffold_samples_train_only', len(none_idx))
-        ),
-        'unique_valid_scaffolds': frozen_split_summary.get('unique_valid_scaffolds'),
-        'fold_valid_scaffold_val_sizes': frozen_split_summary.get('fold_valid_scaffold_val_sizes', {}),
-        'folds_to_run': selected_folds,
-    }
-    valid_scaffold_sample_count = split_summary['valid_scaffold_samples']
+        print(json.dumps(split_summary, indent=2, ensure_ascii=False), flush=True)
+    else:
+        # Frozen scaffold split
+        split_dir = os.path.abspath(cfg.split_dir)
+        print(f'[{datetime.now().strftime("%Y-%m-%d %H:%M:%S")}] Using frozen scaffold split from {split_dir}', flush=True)
+        split_manifest = load_frozen_split_manifest(split_dir)
+        validate_frozen_manifest_alignment(smiles_list, split_manifest)
+        split_manifest_lookup = split_manifest.set_index('sample_id', drop=False)
+
+        none_idx = split_manifest[split_manifest['is_none_scaffold']]['sample_id'].astype(int).tolist()
+        summary_file = os.path.join(split_dir, 'split_summary.json')
+        if os.path.exists(summary_file):
+            with open(summary_file, 'r', encoding='utf-8') as f:
+                frozen_split_summary = json.load(f)
+        else:
+            fold_val_sizes = {
+                f'fold_{fold}': int((split_manifest['assigned_val_fold'] == fold).sum())
+                for fold in range(1, cfg.n_folds + 1)
+            }
+            frozen_split_summary = {
+                'total_aligned_samples': total_sample_count,
+                'valid_scaffold_samples': int((~split_manifest['is_none_scaffold']).sum()),
+                'none_scaffold_samples_train_only': len(none_idx),
+                'unique_valid_scaffolds': None,
+                'fold_valid_scaffold_val_sizes': fold_val_sizes,
+                'n_folds': cfg.n_folds,
+            }
+
+        split_summary = {
+            'run_id': run_id,
+            'split_source': 'frozen_scaffold',
+            'split_dir': split_dir,
+            'total_aligned_samples': int(frozen_split_summary.get('total_aligned_samples', total_sample_count)),
+            'valid_scaffold_samples': int(
+                frozen_split_summary.get(
+                    'valid_scaffold_samples',
+                    int((~split_manifest['is_none_scaffold']).sum()),
+                )
+            ),
+            'none_scaffold_samples_train_only': int(
+                frozen_split_summary.get('none_scaffold_samples_train_only', len(none_idx))
+            ),
+            'unique_valid_scaffolds': frozen_split_summary.get('unique_valid_scaffolds'),
+            'fold_valid_scaffold_val_sizes': frozen_split_summary.get('fold_valid_scaffold_val_sizes', {}),
+            'folds_to_run': selected_folds,
+        }
+        valid_scaffold_sample_count = split_summary['valid_scaffold_samples']
+
+        print(json.dumps(split_summary, indent=2, ensure_ascii=False), flush=True)
 
     save_json(split_summary, os.path.join(output_dir, 'split_summary.json'))
     save_dataframe(split_manifest, os.path.join(output_dir, 'split_manifest'), index=False)
-    print(json.dumps(split_summary, indent=2, ensure_ascii=False), flush=True)
 
     tokenizer = AutoTokenizer.from_pretrained(cfg.model_name, trust_remote_code=True)
     collator = JointCollator(tokenizer=tokenizer, max_length=cfg.max_length)
@@ -1343,17 +1498,28 @@ def run_training(cfg: TrainConfig, device: torch.device) -> None:
     all_oof_frames: List[pd.DataFrame] = []
 
     for fold in selected_folds:
-        train_idx, val_idx = load_frozen_fold_indices(split_dir, fold, total_sample_count)
+        if cfg.use_random_split:
+            train_idx, val_idx = get_random_fold_indices(fold_indices_list, fold, total_sample_count)
+            split_type_str = 'random_kfold'
+            none_count_str = ''
+        else:
+            train_idx, val_idx = load_frozen_fold_indices(split_dir, fold, total_sample_count)
+            split_type_str = 'frozen_scaffold'
+            none_count_str = f' | None(train-only): {len(none_idx)}'
+
         val_idx_set = set(val_idx)
-        val_is_none_scaffold = split_manifest.loc[val_idx]['is_none_scaffold'].tolist()
-        assert not any(val_is_none_scaffold), 'None-scaffold samples leaked into validation set.'
+
+        if not cfg.use_random_split:
+            val_is_none_scaffold = split_manifest.loc[val_idx]['is_none_scaffold'].tolist()
+            assert not any(val_is_none_scaffold), 'None-scaffold samples leaked into validation set.'
+            assert none_idx_set.issubset(set(train_idx)), 'Some none-scaffold samples are missing from the frozen train split.'
+
         assert len(set(train_idx) & val_idx_set) == 0, 'Train/Val overlap detected.'
-        assert none_idx_set.issubset(set(train_idx)), 'Some none-scaffold samples are missing from the frozen train split.'
 
         print('\n' + '=' * 80, flush=True)
         print(
-            f'Fold {fold}/{cfg.n_folds} | Split: frozen_scaffold | '
-            f'Train: {len(train_idx)} | Val: {len(val_idx)} | None(train-only): {len(none_idx)}',
+            f'Fold {fold}/{cfg.n_folds} | Split: {split_type_str} | '
+            f'Train: {len(train_idx)} | Val: {len(val_idx)}{none_count_str}',
             flush=True,
         )
         print('=' * 80, flush=True)
@@ -1639,24 +1805,31 @@ def run_training(cfg: TrainConfig, device: torch.device) -> None:
         cv_error_bins_df = build_error_bin_summary(cv_oof_df)
         save_dataframe(cv_error_bins_df, os.path.join(output_dir, 'cv_error_bins'), index=False)
 
-    summary = {
+    # Build summary based on split type
+    summary: Dict[str, Any] = {
         'run_id': run_id,
         'git_commit': git_commit,
         'output_dir': output_dir,
         'checkpoint_policy': 'full_model_only',
+        'split_type': 'random_kfold' if cfg.use_random_split else 'frozen_scaffold',
         'fold_best_mae_raw': all_fold_best_mae,
         'mean_best_mae_raw': float(np.mean(all_fold_best_mae)),
         'std_best_mae_raw': float(np.std(all_fold_best_mae)),
         'folds_ran': len(selected_folds),
         'folds_requested': selected_folds,
         'total_aligned_samples': total_sample_count,
-        'valid_scaffold_samples': valid_scaffold_sample_count,
-        'none_scaffold_samples_train_only': len(none_idx),
         'batch_size': cfg.batch_size,
         'stage2_batch_size': cfg.stage2_batch_size,
         'main_branch_noise_std': cfg.main_branch_noise_std,
         'device': str(device),
     }
+
+    # Add split-specific fields
+    if cfg.use_random_split:
+        summary['seed'] = cfg.seed
+    else:
+        summary['valid_scaffold_samples'] = valid_scaffold_sample_count
+        summary['none_scaffold_samples_train_only'] = len(none_idx)
     save_json(summary, os.path.join(output_dir, 'summary.json'))
     save_dataframe(pd.DataFrame([summary]), os.path.join(output_dir, 'cv_summary'), index=False)
     append_run_summary(
@@ -1699,7 +1872,7 @@ def run_training(cfg: TrainConfig, device: torch.device) -> None:
 
 
 def main() -> None:
-    cfg = TrainConfig()
+    cfg = parse_args_to_config()
     run_training(cfg, infer_device(cfg))
 
 

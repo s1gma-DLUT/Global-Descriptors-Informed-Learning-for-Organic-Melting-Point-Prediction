@@ -8,11 +8,6 @@ Features are merged based on SMILES (with optional canonical SMILES matching)
 to ensure molecules with different SMILES representations but same structure
 are correctly identified as duplicates.
 
-XTB Environment:
-    - XTB binary is expected to be available via conda environment 'pxf_xtb'
-    - Path: /home/liutao/.conda/envs/pxf_xtb/bin/xtb
-    - To run: conda run -n pxf_xtb xtb ...
-
 Workflow:
     1. Load existing XTB feature library (XTB_train.pth)
     2. Load newly computed XTB features from parsed outputs

@@ -6,9 +6,9 @@ This script handles the workflow for computing XTB features for molecules
 that are not yet in the existing feature library.
 
 XTB Environment:
-    - XTB binary is expected to be available via conda environment 'pxf_xtb'
-    - Path: /home/liutao/.conda/envs/pxf_xtb/bin/xtb
-    - To run: conda run -n pxf_xtb xtb ...
+    - XTB binary can be available on PATH, or through a conda environment.
+    - Default conda environment name: xtb
+    - To run: conda run -n xtb xtb ...
 
 Workflow:
     1. Load new molecules from input file (CSV with SMILES column)
@@ -38,7 +38,7 @@ Usage:
 Note:
     This script generates the input files and commands for XTB calculations,
     but does NOT run the actual XTB calculations. You need to execute the
-    generated commands separately using the pxf_xtb conda environment.
+    generated commands separately using your XTB installation.
     
     IMPORTANT: This script only handles 16D XTB features. Molecular volume
     (Molecular_Volume_cm3_mol) is computed separately by RDKit.
@@ -61,8 +61,8 @@ import numpy as np
 
 from src.preprocessing.schema import XTB_PARSED_16D_NAMES, XTB_PARSED_16D_DIM
 
-XTB_CONDA_ENV = "pxf_xtb"
-XTB_BINARY_DEFAULT = "/home/liutao/.conda/envs/pxf_xtb/bin/xtb"
+XTB_CONDA_ENV = os.environ.get("XTB_CONDA_ENV", "xtb")
+XTB_BINARY_DEFAULT = os.environ.get("XTB_BINARY", "")
 
 
 def check_xtb_installation() -> Dict[str, Any]:
@@ -105,8 +105,8 @@ def check_xtb_installation() -> Dict[str, Any]:
     except (subprocess.TimeoutExpired, FileNotFoundError, Exception) as e:
         result['error'] = f"conda run method failed: {e}"
 
-    # Method 2: Try direct path
-    if os.path.exists(XTB_BINARY_DEFAULT):
+    # Method 2: Try an explicit direct path supplied by the user.
+    if XTB_BINARY_DEFAULT and os.path.exists(XTB_BINARY_DEFAULT):
         try:
             proc = subprocess.run(
                 [XTB_BINARY_DEFAULT, '--version'],
@@ -123,21 +123,16 @@ def check_xtb_installation() -> Dict[str, Any]:
         except Exception as e:
             result['error'] = f"direct path method failed: {e}"
 
-    # Method 3: Try which
+    # Method 3: Try PATH lookup.
     try:
-        proc = subprocess.run(
-            ['which', 'xtb'],
-            capture_output=True,
-            text=True,
-            timeout=10
-        )
-        if proc.returncode == 0:
-            result['path'] = proc.stdout.strip()
+        xtb_path = shutil.which('xtb')
+        if xtb_path:
+            result['path'] = xtb_path
             result['available'] = True
-            result['method'] = 'which'
+            result['method'] = 'PATH'
             return result
     except Exception as e:
-        result['error'] = f"which method failed: {e}"
+        result['error'] = f"PATH lookup failed: {e}"
 
     return result
 
@@ -334,8 +329,8 @@ Examples:
         --step generate_cmds
 
 XTB Requirements:
-    - XTB must be installed in conda environment 'pxf_xtb'
-    - To run calculations: conda run -n pxf_xtb bash run_xtb_batch.sh
+    - XTB must be available on PATH, or through the XTB_CONDA_ENV conda env.
+    - To run calculations: bash run_xtb_batch.sh
         """
     )
     parser.add_argument('--check_xtb', action='store_true',
@@ -366,7 +361,7 @@ XTB Requirements:
         result = check_xtb_installation()
 
         if result['available']:
-            print(f"✓ XTB is available")
+            print("OK: XTB is available")
             print(f"  Method: {result['method']}")
             print(f"  Path: {result['path']}")
             print(f"  Version: {result['version']}")
@@ -376,7 +371,7 @@ XTB Requirements:
             print(f"  OR")
             print(f"  conda run -n {XTB_CONDA_ENV} bash run_xtb_batch.sh")
         else:
-            print(f"✗ XTB is NOT available")
+            print("ERROR: XTB is NOT available")
             if result['error']:
                 print(f"  Error: {result['error']}")
             print()
@@ -398,9 +393,9 @@ XTB Requirements:
     print(f"Checking XTB availability...")
     xtb_check = check_xtb_installation()
     if xtb_check['available']:
-        print(f"  ✓ XTB available ({xtb_check['method']})")
+        print(f"  OK: XTB available ({xtb_check['method']})")
     else:
-        print(f"  ✗ XTB NOT available")
+        print("  ERROR: XTB NOT available")
         print(f"    {xtb_check.get('error', 'Unknown error')}")
         print()
         print("You can still generate commands, but need XTB installed to run them.")

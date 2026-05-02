@@ -27,7 +27,7 @@ NOTE:
 USAGE:
     For new molecules, use the workflow:
         1. scripts/00b_compute_xtb_features.py --step generate_cmds
-        2. Run: conda run -n pxf_xtb bash run_xtb_batch.sh
+        2. Run the generated XTB batch script in your XTB environment
         3. Extract 16D features: this module
         4. Compute RDKit volume: scripts/00c_compute_rdkit_volume.py
         5. Merge to 17D: scripts/00d_merge_feature_bundle.py
@@ -111,9 +111,16 @@ def parse_xtb_output(xtb_output_text: str, smiles: str) -> XTBResult:
         _parse_charges(lines, result)
         _calculate_derived_fields(result)
 
-        if result.n_atoms > 0:
+        # Consider the parse successful when enough feature fields were
+        # recovered to build a meaningful vector. Missing fields remain marked
+        # in field_status for downstream validation.
+        successful_fields = [k for k, v in result.field_status.items() if v not in ['unparsed', 'unresolved']]
+
+        if len(successful_fields) >= 5:
             result.success = True
-            result.raw_parsing_notes.append("Parse completed successfully")
+            result.raw_parsing_notes.append(f"Parse completed successfully with {len(successful_fields)} fields")
+        else:
+            result.raw_parsing_notes.append(f"Parse incomplete: only {len(successful_fields)} fields parsed")
 
     except Exception as e:
         result.error_message = f"Parse error: {str(e)}"
@@ -162,19 +169,39 @@ def _parse_atom_counts(lines: List[str], result: XTBResult) -> Dict[int, int]:
                         pass
             break
 
+    atom_count_source = 'direct_parse' if total_heavy_atoms > 0 else 'unresolved'
+
+    # Fall back to the input SMILES when the XTB atom table is not present.
+    if total_heavy_atoms == 0 and result.smiles:
+        try:
+            from rdkit import Chem
+            mol = Chem.MolFromSmiles(result.smiles)
+            if mol:
+                total_heavy_atoms = mol.GetNumHeavyAtoms()
+                atom_count_source = 'calculated_from_smiles'
+                mass = 0.0
+                for atom in mol.GetAtoms():
+                    z = atom.GetAtomicNum()
+                    mass += ATOMIC_MASSES.get(z, 0.0)
+                result.molecular_mass_amu = mass
+                result.raw_parsing_notes.append(f"Calculated heavy atoms from SMILES: {total_heavy_atoms}, Mass: {mass:.4f} amu")
+        except Exception as e:
+            result.raw_parsing_notes.append(f"Error calculating atoms from SMILES: {e}")
+
     result.n_heavy_atoms = float(total_heavy_atoms)
     result.n_atoms = float(total_heavy_atoms)
 
     mass = 0.0
     for z, count in atom_counts.items():
         mass += ATOMIC_MASSES.get(z, 0.0) * count
-    result.molecular_mass_amu = mass
+    if mass > 0:
+        result.molecular_mass_amu = mass
 
-    result.field_status['N_Atoms'] = 'direct_parse'
-    result.field_status['N_Heavy_Atoms'] = 'direct_parse'
-    result.field_status['Molecular_Mass_amu'] = 'derived'
+    result.field_status['N_Atoms'] = atom_count_source
+    result.field_status['N_Heavy_Atoms'] = atom_count_source
+    result.field_status['Molecular_Mass_amu'] = 'derived' if mass > 0 else atom_count_source
 
-    result.raw_parsing_notes.append(f"Heavy atoms: {total_heavy_atoms}, Mass: {mass:.4f} amu")
+    result.raw_parsing_notes.append(f"Heavy atoms: {total_heavy_atoms}, Mass: {result.molecular_mass_amu:.4f} amu")
 
     return atom_counts
 
@@ -183,35 +210,68 @@ def _parse_total_energy(lines: List[str], result: XTBResult) -> None:
     """Parse total energy from XTB output."""
     energy_au = None
 
-    for line in lines:
+    for i, line in enumerate(lines):
         line_stripped = line.strip()
 
-        if ':: total energy' in line_stripped and 'Eh' in line_stripped:
-            match = re.search(r'(-?\d+\.\d+)', line_stripped.split('Eh')[0].split()[-1])
-            if match:
-                energy_au = float(match.group(1))
-                result.raw_parsing_notes.append(f"Found total energy (:: format): {energy_au} Eh")
-                break
-
-        if line_stripped.startswith('| TOTAL ENERGY') and 'Eh' in line_stripped:
+        # Format: "energy: -45.215485223988 gnorm: 0.000654437166 ..."
+        if line_stripped.startswith('energy:'):
             parts = line_stripped.split()
-            for j, p in enumerate(parts):
-                if 'Eh' in p:
+            if len(parts) >= 2:
+                try:
+                    energy_str = parts[1]
+                    energy_au = float(energy_str)
+                    result.raw_parsing_notes.append(f"Found total energy (xtb format): {energy_au} Eh")
+                    break
+                except (ValueError, IndexError):
+                    pass
+
+        # Format: ":: total energy             -45.215485224507 Eh"
+        if ':: total energy' in line_stripped:
+            parts = line_stripped.split()
+            for j, part in enumerate(parts):
+                if 'Eh' in part:
                     try:
-                        energy_str = p.replace('Eh', '').strip()
-                        if energy_str:
-                            energy_au = float(energy_str)
-                            result.raw_parsing_notes.append(f"Found total energy (| format): {energy_au} Eh")
-                            break
+                        energy_str = parts[j-1]
+                        energy_au = float(energy_str)
+                        result.raw_parsing_notes.append(f"Found total energy (:: format): {energy_au} Eh")
+                        break
                     except (ValueError, IndexError):
                         pass
-                    if j > 0:
+            if energy_au is not None:
+                break
+
+        # Format: "| TOTAL ENERGY              -45.219193089762 Eh   |"
+        if '| TOTAL ENERGY' in line_stripped:
+            parts = line_stripped.split()
+            for j, part in enumerate(parts):
+                if 'Eh' in part:
+                    try:
+                        energy_str = parts[j-1]
+                        energy_au = float(energy_str)
+                        result.raw_parsing_notes.append(f"Found total energy (| format): {energy_au} Eh")
+                        break
+                    except (ValueError, IndexError):
+                        pass
+            if energy_au is not None:
+                break
+
+        # Format: "total energy  :   -19.7268295 Eh ..."
+        if 'total energy' in line_stripped and ':' in line_stripped:
+            parts = line_stripped.split(':', 1)
+            if len(parts) == 2:
+                value_part = parts[1].strip()
+                value_parts = value_part.split()
+                for j, part in enumerate(value_parts):
+                    if 'Eh' in part:
                         try:
-                            energy_au = float(parts[j-1])
-                            result.raw_parsing_notes.append(f"Found total energy (| format, prev): {energy_au} Eh")
+                            energy_str = value_parts[j-1]
+                            energy_au = float(energy_str)
+                            result.raw_parsing_notes.append(f"Found total energy (total energy: format): {energy_au} Eh")
                             break
                         except (ValueError, IndexError):
                             pass
+                if energy_au is not None:
+                    break
 
     if energy_au is not None and energy_au != 0:
         result.electronic_energy_au = energy_au
@@ -233,8 +293,10 @@ def _parse_homo_lumo(lines: List[str], result: XTBResult) -> None:
     for i, line in enumerate(lines):
         line_stripped = line.strip()
 
-        if gap_ev is None and 'HL-Gap' in line_stripped and 'eV' in line_stripped:
-            for p in line_stripped.split():
+        # Format: "HL-Gap 0.1511286 Eh 4.1124 eV"
+        if gap_ev is None and 'HL-Gap' in line_stripped:
+            parts = line_stripped.split()
+            for j, p in enumerate(parts):
                 if 'eV' in p:
                     try:
                         gap_str = p.replace('eV', '').strip()
@@ -246,44 +308,49 @@ def _parse_homo_lumo(lines: List[str], result: XTBResult) -> None:
                             break
                     except ValueError:
                         pass
-            if gap_ev is None:
-                parts = line_stripped.split()
-                for j, p in enumerate(parts):
-                    if p == 'eV' and j > 0:
+
+                    # If "eV" is a separate token, use the previous token.
+                    if j > 0:
                         try:
                             gap_ev = float(parts[j-1])
                             result.homo_lumo_gap_ev = gap_ev
                             result.field_status['HOMO_LUMO_Gap_eV'] = 'direct_parse'
-                            result.raw_parsing_notes.append(f"Found HOMO-LUMO gap (split): {gap_ev} eV")
+                            result.raw_parsing_notes.append(f"Found HOMO-LUMO gap (from previous part): {gap_ev} eV")
                             break
                         except ValueError:
                             pass
 
+        # Format: "... -11.1260 (HOMO)"
         if homo_ev is None and '(HOMO)' in line_stripped:
             parts = line_stripped.split()
-            if '(HOMO)' in parts:
-                idx = parts.index('(HOMO)')
-                if idx >= 2:
-                    try:
-                        homo_ev = float(parts[idx-1])
-                        result.homo_ev = homo_ev
-                        result.field_status['HOMO_eV'] = 'direct_parse'
-                        result.raw_parsing_notes.append(f"Found HOMO: {homo_ev} eV")
-                    except ValueError:
-                        pass
+            for j, p in enumerate(parts):
+                if '(HOMO)' in p:
+                    for k in range(j-1, max(j-5, -1), -1):
+                        try:
+                            homo_ev = float(parts[k])
+                            result.homo_ev = homo_ev
+                            result.field_status['HOMO_eV'] = 'direct_parse'
+                            result.raw_parsing_notes.append(f"Found HOMO: {homo_ev} eV")
+                            break
+                        except ValueError:
+                            continue
+                    break
 
+        # Format: "... -7.0135 (LUMO)"
         if lumo_ev is None and '(LUMO)' in line_stripped:
             parts = line_stripped.split()
-            if '(LUMO)' in parts:
-                idx = parts.index('(LUMO)')
-                if idx >= 2:
-                    try:
-                        lumo_ev = float(parts[idx-1])
-                        result.lumo_ev = lumo_ev
-                        result.field_status['LUMO_eV'] = 'direct_parse'
-                        result.raw_parsing_notes.append(f"Found LUMO: {lumo_ev} eV")
-                    except ValueError:
-                        pass
+            for j, p in enumerate(parts):
+                if '(LUMO)' in p:
+                    for k in range(j-1, max(j-5, -1), -1):
+                        try:
+                            lumo_ev = float(parts[k])
+                            result.lumo_ev = lumo_ev
+                            result.field_status['LUMO_eV'] = 'direct_parse'
+                            result.raw_parsing_notes.append(f"Found LUMO: {lumo_ev} eV")
+                            break
+                        except ValueError:
+                            continue
+                    break
 
     if homo_ev is None and lumo_ev is None and gap_ev is not None and gap_ev > 0:
         homo_ev = -8.0
@@ -308,26 +375,35 @@ def _parse_dipole(lines: List[str], result: XTBResult) -> None:
     dipole_tot = None
 
     for i, line in enumerate(lines):
-        if 'full:' in line:
-            parts = line.split()
-            if len(parts) >= 5:
+        line_stripped = line.strip()
+
+        # Format: "full: -0.676 0.883 0.231 2.886"
+        if 'full:' in line_stripped:
+            parts = line_stripped.split()
+            if len(parts) >= 4:
                 try:
                     dipole_x = float(parts[1])
                     dipole_y = float(parts[2])
                     dipole_z = float(parts[3])
-                    dipole_tot = float(parts[4].strip())
+                    if len(parts) >= 5:
+                        dipole_tot = float(parts[4])
 
-                    result.dipole_total_debye = dipole_tot
-                    result.field_status['Dipole_Total_Debye'] = 'direct_parse'
+                    # Some outputs omit total; derive it from the vector.
+                    if dipole_tot is None and dipole_x is not None and dipole_y is not None and dipole_z is not None:
+                        dipole_tot = sqrt(dipole_x**2 + dipole_y**2 + dipole_z**2)
 
-                    if dipole_x is not None and dipole_y is not None and dipole_z is not None and dipole_tot > 0:
-                        theta = degrees(atan2(dipole_z, sqrt(dipole_x**2 + dipole_y**2)))
-                        phi = degrees(atan2(dipole_y, dipole_x))
-                        result.dipole_theta_deg = theta
-                        result.dipole_phi_deg = phi
-                        result.field_status['Dipole_Theta_deg'] = 'derived'
-                        result.field_status['Dipole_Phi_deg'] = 'derived'
-                        result.raw_parsing_notes.append(f"Dipole: x={dipole_x}, y={dipole_y}, z={dipole_z}, total={dipole_tot}")
+                    if dipole_tot is not None:
+                        result.dipole_total_debye = dipole_tot
+                        result.field_status['Dipole_Total_Debye'] = 'direct_parse'
+
+                        if dipole_x is not None and dipole_y is not None and dipole_z is not None and dipole_tot > 0:
+                            theta = degrees(atan2(dipole_z, sqrt(dipole_x**2 + dipole_y**2)))
+                            phi = degrees(atan2(dipole_y, dipole_x))
+                            result.dipole_theta_deg = theta
+                            result.dipole_phi_deg = phi
+                            result.field_status['Dipole_Theta_deg'] = 'derived'
+                            result.field_status['Dipole_Phi_deg'] = 'derived'
+                            result.raw_parsing_notes.append(f"Dipole: x={dipole_x}, y={dipole_y}, z={dipole_z}, total={dipole_tot}")
                     break
                 except (ValueError, IndexError) as e:
                     result.raw_parsing_notes.append(f"Error parsing dipole: {e}")
@@ -343,10 +419,13 @@ def _parse_charges(lines: List[str], result: XTBResult) -> None:
     charges = []
 
     for i, line in enumerate(lines):
-        if '#   Z          covCN         q      C6AA' in line:
-            for j in range(i+1, min(i+100, len(lines))):
+        line_stripped = line.strip()
+
+        # Charge table header, for example: "# Z covCN q C6AA alpha(0)".
+        if '#   Z          covCN         q' in line_stripped or '#   Z          covCN         q      C6AA' in line_stripped:
+            for j in range(i+1, min(i+200, len(lines))):
                 charge_line = lines[j].strip()
-                if not charge_line:
+                if not charge_line or charge_line.startswith('#') or 'Mol. C6AA' in charge_line:
                     break
 
                 parts = charge_line.split()

@@ -7,6 +7,7 @@ This is a thin wrapper around the legacy training script.
 import os
 import sys
 import argparse
+import subprocess
 import yaml
 from datetime import datetime
 
@@ -24,9 +25,23 @@ def load_config(config_path):
     return config
 
 
+def expand_config_value(value):
+    if isinstance(value, str):
+        return os.path.expandvars(os.path.expanduser(value))
+    return value
+
+
 def main():
     args = parse_args()
-    config = load_config(args.config)
+    config = {key: expand_config_value(value) for key, value in load_config(args.config).items()}
+    model_name = config['model_name_or_path']
+    if 'PATH_OR_HF_ID_TO_MOLFORMER' in model_name:
+        model_name = os.environ.get('MOLFORMER_MODEL', model_name)
+    if 'PATH_OR_HF_ID_TO_MOLFORMER' in model_name:
+        raise ValueError(
+            "Set model_name_or_path in the config, or export MOLFORMER_MODEL "
+            "to a local MoLFormer checkpoint/Hugging Face model id."
+        )
     
     # Set up output directory
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
@@ -42,7 +57,7 @@ def main():
         sys.executable, legacy_script,
         '--data_dir', config.get('data_dir', 'data'),
         '--outputs_root', output_dir,
-        '--model_name', config['model_name_or_path'],
+        '--model_name', model_name,
         '--seed', str(config['seed']),
         '--n_folds', str(config['n_folds']),
         '--batch_size', str(config['batch_size']),
@@ -75,8 +90,8 @@ def main():
     print(f"Output directory: {full_output_dir}")
     print(f"Command: {' '.join(cmd)}")
     
-    # Run the legacy script
-    os.system(' '.join(cmd))
+    # Run the legacy script.
+    subprocess.run(cmd, check=True)
 
 
 if __name__ == '__main__':

@@ -1,0 +1,9 @@
+cff-version: 1.2.0
+title: Single-Component Melting Point Prediction
+message: "If you use this repository, please cite the associated paper or repository release."
+type: software
+license: MIT
+date-released: 2026-05-02
+repository-code: "https://github.com/s1gma-DLUT/Melting-point-prediction-for-a-single-component-system"
+authors:
+  - name: "s1gma-DLUT"

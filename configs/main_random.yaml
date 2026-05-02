@@ -1,9 +1,6 @@
-# Main scaffold split configuration for single-component melting point prediction
-task_name: "single_component_mp_scaffold"
-split_type: "frozen_scaffold_cv"
-use_frozen_split: true
-split_dir: "splits/canonical_v2_scaffold/"
-split_manifest: "splits/canonical_v2_scaffold/split_manifest.csv"
+# Main random split configuration for single-component melting point prediction
+task_name: "single_component_mp_random"
+use_random_split: true
 seed: 114514
 n_folds: 5
 batch_size: 256
@@ -64,4 +61,4 @@ gpu_ids: ""
 device: ""
 
 # Notes
-notes: "Main experiment with scaffold split, using MoLFormer + D-MPNN + XTB + RDKit"
+notes: "Main experiment with random split, using MoLFormer + D-MPNN + XTB + RDKit"

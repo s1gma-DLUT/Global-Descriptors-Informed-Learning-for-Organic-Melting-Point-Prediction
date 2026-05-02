@@ -82,7 +82,7 @@ The model is a multimodal fusion architecture that combines multiple molecular r
 
 - **MAE** (Mean Absolute Error): Primary metric
 - **RMSE** (Root Mean Squared Error): Secondary metric
-- **R²** (Coefficient of Determination): For variance explanation
+- **R^2** (Coefficient of Determination): For variance explanation
 
 ## Ablation Studies
 

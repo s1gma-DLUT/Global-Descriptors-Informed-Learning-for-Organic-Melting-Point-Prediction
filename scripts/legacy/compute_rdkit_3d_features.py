@@ -109,8 +109,8 @@ def main():
     # 读取训练集和测试集
     print("\n" + "="*60)
     print("读取数据集...")
-    train_df = pd.read_csv("/home/liutao/pxf/MP_new/data/multimodal_train.csv")
-    test_df = pd.read_csv("/home/liutao/pxf/MP_new/data/multimodal_test.csv")
+    train_df = pd.read_csv("data/raw/multimodal_train.csv")
+    test_df = pd.read_csv("data/raw/multimodal_test.csv")
     
     train_smiles = train_df['SMILES'].tolist()
     test_smiles = test_df['SMILES'].tolist()
@@ -137,8 +137,8 @@ def main():
     print("保存特征文件...")
     
     # 保存为npy格式
-    train_npy_path = "/home/liutao/pxf/MP_new/data/rdkit3d_train.npy"
-    test_npy_path = "/home/liutao/pxf/MP_new/data/rdkit3d_test.npy"
+    train_npy_path = "data/processed/rdkit3d_train.npy"
+    test_npy_path = "data/processed/rdkit3d_test.npy"
     
     np.save(train_npy_path, train_features)
     np.save(test_npy_path, test_features)
@@ -147,8 +147,8 @@ def main():
     print(f"测试集特征已保存: {test_npy_path}")
     
     # 保存为pth格式
-    train_pth_path = "/home/liutao/pxf/MP_new/data/rdkit3d_train.pth"
-    test_pth_path = "/home/liutao/pxf/MP_new/data/rdkit3d_test.pth"
+    train_pth_path = "data/processed/rdkit3d_train.pth"
+    test_pth_path = "data/processed/rdkit3d_test.pth"
     
     train_data = {
         'features': torch.FloatTensor(train_features),

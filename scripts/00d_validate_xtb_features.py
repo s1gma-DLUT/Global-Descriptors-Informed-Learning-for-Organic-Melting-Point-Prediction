@@ -213,7 +213,7 @@ def main():
     parser.add_argument(
         '--xtb_pth',
         type=str,
-        default='/home/liutao/pxf/MP_new/data/XTB_train.pth',
+        default='data/processed/XTB_train.pth',
         help='Path to XTB_train.pth'
     )
     parser.add_argument(
