@@ -25,6 +25,14 @@ from torch_geometric.data import Batch, Data
 from torch_geometric.nn import GlobalAttention, global_max_pool
 from transformers import AutoModel, AutoTokenizer
 
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+REPO_ROOT = os.path.dirname(SCRIPT_DIR)
+SRC_DIR = os.path.join(REPO_ROOT, 'src')
+if SRC_DIR not in sys.path:
+    sys.path.insert(0, SRC_DIR)
+
+from utils.splits import DEFAULT_SEED, build_random_folds, get_random_fold_indices
+
 warnings.filterwarnings('ignore')
 RDLogger.DisableLog('rdApp.*')
 
@@ -36,7 +44,7 @@ class TrainConfig:
     model_name: str = 'PATH_OR_HF_ID_TO_MOLFORMER'
     split_dir: str = 'splits/scaffold'
     use_random_split: bool = False  # If True, use random K-fold instead of frozen scaffold split
-    seed: int = 114514
+    seed: int = DEFAULT_SEED
     n_folds: int = 5
     batch_size: int = 256
     num_workers: int = 80
@@ -168,33 +176,6 @@ def load_frozen_fold_indices(split_dir: str, fold: int, total_samples: int) -> T
         raise ValueError(f'Validation indices for fold {fold} are out of range.')
     val_idx_set = set(val_idx)
     train_idx = [idx for idx in range(total_samples) if idx not in val_idx_set]
-    return train_idx, val_idx
-
-
-def build_random_folds(n_samples: int, n_folds: int = 5, seed: int = 114514) -> List[List[int]]:
-    rng = np.random.RandomState(seed)
-    indices = np.arange(n_samples)
-    rng.shuffle(indices)
-
-    fold_sizes = np.full(n_folds, n_samples // n_folds)
-    fold_sizes[:n_samples % n_folds] += 1
-
-    fold_indices: List[List[int]] = []
-    start = 0
-    for fold_size in fold_sizes:
-        fold_indices.append(indices[start:start + fold_size].tolist())
-        start += fold_size
-
-    return fold_indices
-
-
-def get_random_fold_indices(fold_indices: List[List[int]], fold: int, total_samples: int) -> Tuple[List[int], List[int]]:
-    fold_zero = fold - 1
-    val_idx = sorted(fold_indices[fold_zero])
-    val_idx_set = set(val_idx)
-    all_indices = set(range(total_samples))
-    train_idx = sorted(list(all_indices - val_idx_set))
-
     return train_idx, val_idx
 
 

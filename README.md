@@ -91,8 +91,8 @@ Random split baseline:
 python scripts/02_train.py --config configs/main_random.yaml
 ```
 
-The training wrapper loads the YAML config and calls
-`scripts/legacy_main_train.py`, which contains the model and training loop.
+The public training entry point is `scripts/02_train.py`; it loads a YAML
+config and dispatches to the shared training implementation.
 
 ## Configs
 
@@ -104,6 +104,6 @@ The training wrapper loads the YAML config and calls
 ## Notes
 
 - Keep feature tensors, checkpoints, logs, and generated outputs out of git.
-- Frozen split indices under `splits/canonical_v2_scaffold/` are tracked for
+- Frozen split indices under `splits/scaffold/` are tracked for
   reproducible training.
 - See `docs/` for compact details about the model and data schema.

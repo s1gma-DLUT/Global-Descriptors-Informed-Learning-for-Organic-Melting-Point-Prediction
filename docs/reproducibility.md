@@ -22,7 +22,7 @@ set `model_name_or_path` or `MOLFORMER_MODEL`.
 
 ## Tracked Splits
 
-The scaffold fold indices in `splits/canonical_v2_scaffold/` are committed.
+The scaffold fold indices in `splits/scaffold/` are committed.
 Use `configs/main_scaffold.yaml` to train with those frozen folds.
 
 ## What Is Not Tracked

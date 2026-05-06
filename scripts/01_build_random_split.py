@@ -17,12 +17,20 @@ Outputs:
 import os
 import json
 import argparse
+import sys
 from datetime import datetime
 from typing import Dict, List, Tuple
 
-import numpy as np
 import pandas as pd
 import torch
+
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+REPO_ROOT = os.path.dirname(SCRIPT_DIR)
+SRC_DIR = os.path.join(REPO_ROOT, 'src')
+if SRC_DIR not in sys.path:
+    sys.path.insert(0, SRC_DIR)
+
+from utils.splits import DEFAULT_SEED, build_random_folds
 
 
 def load_aligned_multimodal_data() -> Tuple[pd.DataFrame, List[str], List[int]]:
@@ -56,35 +64,6 @@ def load_aligned_multimodal_data() -> Tuple[pd.DataFrame, List[str], List[int]]:
     sample_ids = list(range(len(aligned_df)))
 
     return aligned_df, smiles_list, sample_ids
-
-
-def build_random_folds(n_samples: int, n_folds: int = 5, seed: int = 114514) -> List[List[int]]:
-    """
-    Build random K-fold splits.
-
-    Args:
-        n_samples: Total number of samples
-        n_folds: Number of folds
-        seed: Random seed for reproducibility
-
-    Returns:
-        List of fold indices, where each fold is a list of sample indices
-    """
-    rng = np.random.RandomState(seed)
-    indices = np.arange(n_samples)
-    rng.shuffle(indices)
-
-    # Calculate fold sizes (as even as possible)
-    fold_sizes = np.full(n_folds, n_samples // n_folds)
-    fold_sizes[:n_samples % n_folds] += 1
-
-    fold_indices: List[List[int]] = []
-    start = 0
-    for fold_size in fold_sizes:
-        fold_indices.append(indices[start:start + fold_size].tolist())
-        start += fold_size
-
-    return fold_indices
 
 
 def generate_split_manifest(
@@ -174,7 +153,7 @@ def generate_split_summary(
     aligned_df: pd.DataFrame,
     fold_sizes: Dict[int, Dict[str, int]],
     n_folds: int = 5,
-    seed: int = 114514
+    seed: int = DEFAULT_SEED
 ) -> Dict[str, any]:
     """
     Generate split summary.
@@ -228,7 +207,7 @@ def main():
     parser.add_argument(
         '--seed',
         type=int,
-        default=114514,
+        default=DEFAULT_SEED,
         help='Random seed for reproducibility'
     )
     args = parser.parse_args()

@@ -1,12 +1,12 @@
 task_name: "single_component_mp_scaffold"
 split_type: "frozen_scaffold_cv"
 use_frozen_split: true
-split_dir: "splits/canonical_v2_scaffold"
-split_manifest: "splits/canonical_v2_scaffold/split_manifest.csv"
+split_dir: "splits/scaffold"
+split_manifest: "splits/scaffold/split_manifest.csv"
 data_dir: "data"
 outputs_root: "outputs"
 model_name_or_path: "PATH_OR_HF_ID_TO_MOLFORMER"
-seed: 114514
+seed: 516
 n_folds: 5
 batch_size: 256
 num_workers: 8

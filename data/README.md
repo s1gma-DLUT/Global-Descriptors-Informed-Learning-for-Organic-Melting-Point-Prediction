@@ -22,5 +22,3 @@ data/raw/cleaned/XTB_test.pth
 data/raw/cleaned/rdkit3d_train.npy
 data/raw/cleaned/rdkit3d_test.npy
 ```
-
-Do not commit processed feature tensors, checkpoints, or generated outputs.

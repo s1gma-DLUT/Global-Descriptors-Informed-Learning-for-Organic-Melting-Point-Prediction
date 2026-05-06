@@ -7,8 +7,7 @@ The model predicts melting point from four molecular representations:
 - XTB physicochemical feature vector.
 - RDKit descriptor vector.
 
-The training implementation is in `scripts/legacy_main_train.py`; the public
-entry point is `scripts/02_train.py`.
+The public training entry point is `scripts/02_train.py`.
 
 ## Training
 
@@ -17,7 +16,7 @@ separate learning rates for the pretrained text encoder, graph encoder, and
 fusion layers.
 
 The default scaffold configuration trains 5 folds using the frozen indices in
-`splits/canonical_v2_scaffold/`.
+`splits/scaffold/`.
 
 ## Inputs
 

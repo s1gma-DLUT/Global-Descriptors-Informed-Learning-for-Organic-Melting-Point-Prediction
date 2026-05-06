@@ -167,71 +167,34 @@ def load_joblib(path: str, label: str) -> Any:
     return joblib.load(require_file(path, label))
 
 
-def load_3d_fold(
+def load_fold_bundle(
     model_dir: str,
     fold: int,
     device: torch.device,
-    model_name_override: str = "",
-    allow_missing_bert: bool = False,
+    label: str,
+    config_cls: Any,
+    model_factory: Any,
+    scaler_names: Sequence[str],
+    model_name_override: str,
+    allow_missing_bert: bool,
 ) -> LoadedModel:
-    ckpt_path = require_file(
-        os.path.join(model_dir, f"best_fold{fold}_full_model.pt"),
-        f"3D fold {fold} checkpoint",
-    )
+    ckpt_path = require_file(os.path.join(model_dir, f"best_fold{fold}_full_model.pt"), f"{label} fold {fold} checkpoint")
     checkpoint = torch_load(ckpt_path, device)
-    cfg = config_from_checkpoint(checkpoint, ThreeDConfig)
+    cfg = config_from_checkpoint(checkpoint, config_cls)
     if model_name_override:
         cfg.model_name = model_name_override
 
     tokenizer = AutoTokenizer.from_pretrained(cfg.model_name, trust_remote_code=True)
-    model = JointMolFormerDMPNNXTBModel(cfg=cfg, xtb_dim=17, rdkit_dim=25).to(device)
+    model = model_factory(cfg).to(device)
     load_state_dict_checked(model, checkpoint, allow_missing_bert=allow_missing_bert)
     model.eval()
 
-    scaler_dir = require_file(os.path.join(model_dir, f"scalers_fold{fold}"), f"3D fold {fold} scaler dir")
-    return LoadedModel(
-        fold=fold,
-        model=model,
-        tokenizer=tokenizer,
-        cfg=cfg,
-        target_scaler=load_joblib(os.path.join(scaler_dir, "target_scaler.pkl"), "target scaler"),
-        xtb_imputer=load_joblib(os.path.join(scaler_dir, "xtb_imputer.pkl"), "XTB imputer"),
-        rdkit_imputer=load_joblib(os.path.join(scaler_dir, "rdkit_imputer.pkl"), "RDKit imputer"),
-        xtb_scaler=load_joblib(os.path.join(scaler_dir, "xtb_scaler.pkl"), "XTB scaler"),
-        rdkit_scaler=load_joblib(os.path.join(scaler_dir, "rdkit_scaler.pkl"), "RDKit scaler"),
-    )
-
-
-def load_no3d_fold(
-    no3d_module: Any,
-    model_dir: str,
-    fold: int,
-    device: torch.device,
-    model_name_override: str = "",
-    allow_missing_bert: bool = False,
-) -> LoadedModel:
-    ckpt_path = require_file(
-        os.path.join(model_dir, f"best_fold{fold}_full_model.pt"),
-        f"non-3D fold {fold} checkpoint",
-    )
-    checkpoint = torch_load(ckpt_path, device)
-    cfg = config_from_checkpoint(checkpoint, no3d_module.TrainConfig)
-    if model_name_override:
-        cfg.model_name = model_name_override
-
-    tokenizer = AutoTokenizer.from_pretrained(cfg.model_name, trust_remote_code=True)
-    model = no3d_module.JointMolFormerDMPNNMainOnlyModel(cfg=cfg).to(device)
-    load_state_dict_checked(model, checkpoint, allow_missing_bert=allow_missing_bert)
-    model.eval()
-
-    scaler_dir = require_file(os.path.join(model_dir, f"scalers_fold{fold}"), f"non-3D fold {fold} scaler dir")
-    return LoadedModel(
-        fold=fold,
-        model=model,
-        tokenizer=tokenizer,
-        cfg=cfg,
-        target_scaler=load_joblib(os.path.join(scaler_dir, "target_scaler.pkl"), "target scaler"),
-    )
+    scaler_dir = require_file(os.path.join(model_dir, f"scalers_fold{fold}"), f"{label} fold {fold} scaler dir")
+    scalers = {
+        name: load_joblib(os.path.join(scaler_dir, f"{name}.pkl"), name.replace("_", " "))
+        for name in scaler_names
+    }
+    return LoadedModel(fold=fold, model=model, tokenizer=tokenizer, cfg=cfg, **scalers)
 
 
 def validate_smiles(smiles: Any) -> str:
@@ -353,28 +316,53 @@ def xtb17_from_smiles(
             shutil.rmtree(work_dir, ignore_errors=True)
 
 
-def build_3d_features(
+def collect_3d_feature_rows(
+    row_indices: Sequence[int],
     smiles_list: Sequence[str],
-    xtb_cmd: Sequence[str],
-    tmp_root: str,
-    timeout: int,
-    keep_xtb_dirs: bool,
-) -> Tuple[np.ndarray, np.ndarray]:
+    args: argparse.Namespace,
+    result: pd.DataFrame,
+) -> Tuple[List[int], List[str], np.ndarray, np.ndarray]:
+    out_indices: List[int] = []
+    out_smiles: List[str] = []
     xtb_rows: List[np.ndarray] = []
     rdkit_rows: List[np.ndarray] = []
     cache: Dict[str, Tuple[np.ndarray, np.ndarray]] = {}
-    total = len(smiles_list)
-    for idx, smiles in enumerate(smiles_list, start=1):
-        if smiles not in cache:
-            print(f"[3D features] {idx}/{total}: {smiles}", flush=True)
-            cache[smiles] = (
-                xtb17_from_smiles(smiles, xtb_cmd, tmp_root, timeout, keep_xtb_dirs),
-                rdkit25_from_smiles(smiles),
-            )
-        xtb_row, rdkit_row = cache[smiles]
-        xtb_rows.append(xtb_row)
-        rdkit_rows.append(rdkit_row)
-    return np.vstack(xtb_rows).astype(np.float32), np.vstack(rdkit_rows).astype(np.float32)
+
+    with tempfile.TemporaryDirectory(prefix="mp_predict_", dir=args.xtb_work_dir) as tmp_root:
+        total = len(smiles_list)
+        for pos, (row_idx, smiles) in enumerate(zip(row_indices, smiles_list), start=1):
+            try:
+                if smiles not in cache:
+                    print(f"[3D features] {pos}/{total}: {smiles}", flush=True)
+                    cache[smiles] = (
+                        xtb17_from_smiles(
+                            smiles,
+                            args.xtb_cmd,
+                            tmp_root,
+                            args.xtb_timeout,
+                            args.keep_xtb_dirs,
+                        ),
+                        rdkit25_from_smiles(smiles),
+                    )
+                xtb_row, rdkit_row = cache[smiles]
+                out_indices.append(row_idx)
+                out_smiles.append(smiles)
+                xtb_rows.append(xtb_row)
+                rdkit_rows.append(rdkit_row)
+            except Exception as exc:
+                if args.fail_fast:
+                    raise
+                old = str(result.at[row_idx, "predict_error"])
+                result.at[row_idx, "predict_error"] = (old + "; " if old else "") + f"3D failed: {exc}"
+
+    if not out_smiles:
+        return out_indices, out_smiles, np.empty((0, 17), dtype=np.float32), np.empty((0, 25), dtype=np.float32)
+    return (
+        out_indices,
+        out_smiles,
+        np.vstack(xtb_rows).astype(np.float32),
+        np.vstack(rdkit_rows).astype(np.float32),
+    )
 
 
 def make_loader_3d(
@@ -432,6 +420,28 @@ def make_loader_no3d(
     )
 
 
+def predict_from_loader(
+    loaded: LoadedModel,
+    loader: DataLoader,
+    device: torch.device,
+    include_3d_features: bool = False,
+) -> np.ndarray:
+    chunks: List[np.ndarray] = []
+    with torch.no_grad():
+        for batch in loader:
+            kwargs = {
+                "input_ids": batch["input_ids"].to(device),
+                "attention_mask": batch["attention_mask"].to(device),
+                "graph_batch": batch["graph_batch"].to(device),
+            }
+            if include_3d_features:
+                kwargs.update(xtb_feat=batch["xtb"].to(device), rdkit_feat=batch["rdkit"].to(device))
+            pred = loaded.model(**kwargs)
+            chunks.append(pred.detach().cpu().numpy())
+    pred_std = np.concatenate(chunks, axis=0)
+    return loaded.target_scaler.inverse_transform(pred_std.reshape(-1, 1)).reshape(-1)
+
+
 def predict_loaded_3d(
     loaded: LoadedModel,
     smiles: Sequence[str],
@@ -442,19 +452,7 @@ def predict_loaded_3d(
     device: torch.device,
 ) -> np.ndarray:
     loader = make_loader_3d(loaded, smiles, xtb_raw, rdkit_raw, batch_size, num_workers, device)
-    chunks: List[np.ndarray] = []
-    with torch.no_grad():
-        for batch in loader:
-            pred = loaded.model(
-                input_ids=batch["input_ids"].to(device),
-                attention_mask=batch["attention_mask"].to(device),
-                graph_batch=batch["graph_batch"].to(device),
-                xtb_feat=batch["xtb"].to(device),
-                rdkit_feat=batch["rdkit"].to(device),
-            )
-            chunks.append(pred.detach().cpu().numpy())
-    pred_std = np.concatenate(chunks, axis=0)
-    return loaded.target_scaler.inverse_transform(pred_std.reshape(-1, 1)).reshape(-1)
+    return predict_from_loader(loaded, loader, device, include_3d_features=True)
 
 
 def predict_loaded_no3d(
@@ -466,17 +464,7 @@ def predict_loaded_no3d(
     device: torch.device,
 ) -> np.ndarray:
     loader = make_loader_no3d(no3d_module, loaded, smiles, batch_size, num_workers, device)
-    chunks: List[np.ndarray] = []
-    with torch.no_grad():
-        for batch in loader:
-            pred = loaded.model(
-                input_ids=batch["input_ids"].to(device),
-                attention_mask=batch["attention_mask"].to(device),
-                graph_batch=batch["graph_batch"].to(device),
-            )
-            chunks.append(pred.detach().cpu().numpy())
-    pred_std = np.concatenate(chunks, axis=0)
-    return loaded.target_scaler.inverse_transform(pred_std.reshape(-1, 1)).reshape(-1)
+    return predict_from_loader(loaded, loader, device)
 
 
 def parse_folds(folds: str, fold: Optional[int]) -> List[int]:
@@ -518,12 +506,16 @@ def load_models(args: argparse.Namespace, device: torch.device, folds: Sequence[
         for fold in folds:
             print(f"[load] 3D fold {fold}", flush=True)
             models_3d.append(
-                load_3d_fold(
+                load_fold_bundle(
                     args.model_dir_3d,
                     fold,
                     device,
-                    model_name_override=args.model_name,
-                    allow_missing_bert=args.allow_missing_bert,
+                    "3D",
+                    ThreeDConfig,
+                    lambda cfg: JointMolFormerDMPNNXTBModel(cfg=cfg, xtb_dim=17, rdkit_dim=25),
+                    ("target_scaler", "xtb_imputer", "rdkit_imputer", "xtb_scaler", "rdkit_scaler"),
+                    args.model_name,
+                    args.allow_missing_bert,
                 )
             )
 
@@ -532,13 +524,16 @@ def load_models(args: argparse.Namespace, device: torch.device, folds: Sequence[
         for fold in folds:
             print(f"[load] non-3D fold {fold}", flush=True)
             models_no3d.append(
-                load_no3d_fold(
-                    no3d_module,
+                load_fold_bundle(
                     args.model_dir_no3d,
                     fold,
                     device,
-                    model_name_override=args.model_name,
-                    allow_missing_bert=args.allow_missing_bert,
+                    "non-3D",
+                    no3d_module.TrainConfig,
+                    no3d_module.JointMolFormerDMPNNMainOnlyModel,
+                    ("target_scaler",),
+                    args.model_name,
+                    args.allow_missing_bert,
                 )
             )
 
@@ -551,13 +546,14 @@ def predict_single(args: argparse.Namespace, device: torch.device, models_3d: Li
 
     if models_3d:
         with tempfile.TemporaryDirectory(prefix="mp_predict_", dir=args.xtb_work_dir) as tmp_root:
-            xtb_raw, rdkit_raw = build_3d_features(
-                [smiles],
+            xtb_raw = xtb17_from_smiles(
+                smiles,
                 args.xtb_cmd,
                 tmp_root,
                 args.xtb_timeout,
                 args.keep_xtb_dirs,
-            )
+            ).reshape(1, -1)
+            rdkit_raw = rdkit25_from_smiles(smiles).reshape(1, -1)
             fold_preds = {
                 loaded.fold: predict_loaded_3d(
                     loaded,
@@ -629,41 +625,14 @@ def predict_csv(args: argparse.Namespace, device: torch.device, models_3d: List[
         append_fold_predictions(result, valid_indices, "pred_non3d", fold_preds)
 
     if models_3d:
-        xtb_indices: List[int] = []
-        xtb_smiles: List[str] = []
-        xtb_raw_rows: List[np.ndarray] = []
-        rdkit_raw_rows: List[np.ndarray] = []
-        feature_cache: Dict[str, Tuple[np.ndarray, np.ndarray]] = {}
-        with tempfile.TemporaryDirectory(prefix="mp_predict_", dir=args.xtb_work_dir) as tmp_root:
-            total = len(valid_smiles)
-            for pos, (row_idx, smiles) in enumerate(zip(valid_indices, valid_smiles), start=1):
-                try:
-                    if smiles not in feature_cache:
-                        print(f"[3D features] {pos}/{total}: {smiles}", flush=True)
-                        feature_cache[smiles] = (
-                            xtb17_from_smiles(
-                                smiles,
-                                args.xtb_cmd,
-                                tmp_root,
-                                args.xtb_timeout,
-                                args.keep_xtb_dirs,
-                            ),
-                            rdkit25_from_smiles(smiles),
-                        )
-                    xtb_row, rdkit_row = feature_cache[smiles]
-                    xtb_indices.append(row_idx)
-                    xtb_smiles.append(smiles)
-                    xtb_raw_rows.append(xtb_row)
-                    rdkit_raw_rows.append(rdkit_row)
-                except Exception as exc:
-                    if args.fail_fast:
-                        raise
-                    old = str(result.at[row_idx, "predict_error"])
-                    result.at[row_idx, "predict_error"] = (old + "; " if old else "") + f"3D failed: {exc}"
+        xtb_indices, xtb_smiles, xtb_raw, rdkit_raw = collect_3d_feature_rows(
+            valid_indices,
+            valid_smiles,
+            args,
+            result,
+        )
 
         if xtb_smiles:
-            xtb_raw = np.vstack(xtb_raw_rows).astype(np.float32)
-            rdkit_raw = np.vstack(rdkit_raw_rows).astype(np.float32)
             print(f"[predict] 3D rows: {len(xtb_smiles)}", flush=True)
             fold_preds = {
                 loaded.fold: predict_loaded_3d(

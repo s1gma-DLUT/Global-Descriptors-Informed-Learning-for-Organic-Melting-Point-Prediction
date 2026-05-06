@@ -1,7 +1,7 @@
 # Random split baseline configuration for single-component melting point prediction
 task_name: "single_component_mp_random"
 split_type: "random"
-seed: 114514
+seed: 516
 n_folds: 5
 batch_size: 256
 num_workers: 8

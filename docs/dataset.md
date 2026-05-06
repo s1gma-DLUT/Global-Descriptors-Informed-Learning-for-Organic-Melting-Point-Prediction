@@ -41,7 +41,7 @@ loader.
 The main experiment uses frozen scaffold splits under:
 
 ```text
-splits/canonical_v2_scaffold/
+splits/scaffold/
 ```
 
 These split files are tracked so the same folds can be reused across runs.
