@@ -27,3 +27,12 @@ feature bundle:
 17. `Molecular_Volume_cm3_mol`
 
 The schema constants are defined in `src/preprocessing/schema.py`.
+
+## Notes
+
+The feature bundle is intentionally stored as a fixed-order numeric vector for
+training speed. When regenerating features, validate both the shape and feature
+order before starting a training run.
+
+`Molecular_Volume_cm3_mol` is computed by RDKit and appended to the 16 parsed or
+derived XTB fields to form the 17-dimensional bundle.

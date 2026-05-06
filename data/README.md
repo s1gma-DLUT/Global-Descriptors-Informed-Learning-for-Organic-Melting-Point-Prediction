@@ -22,3 +22,7 @@ data/raw/cleaned/XTB_test.pth
 data/raw/cleaned/rdkit3d_train.npy
 data/raw/cleaned/rdkit3d_test.npy
 ```
+
+The training loader aligns molecules by SMILES, then reads the corresponding
+XTB/RDKit bundle and RDKit descriptor rows. Keep local feature files in this
+layout when reproducing the experiments.

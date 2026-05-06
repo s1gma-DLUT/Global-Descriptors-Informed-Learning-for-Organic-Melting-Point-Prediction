@@ -20,10 +20,34 @@ python scripts/02_train.py --config configs/main_scaffold.yaml
 Before training, place the required feature files under `data/raw/cleaned/`, and
 set `model_name_or_path` or `MOLFORMER_MODEL`.
 
+For a local MoLFormer checkpoint:
+
+```bash
+export MOLFORMER_MODEL=/path/to/MoLFormer
+```
+
+On Windows PowerShell:
+
+```powershell
+$env:MOLFORMER_MODEL="C:\path\to\MoLFormer"
+```
+
 ## Tracked Splits
 
 The scaffold fold indices in `splits/scaffold/` are committed.
 Use `configs/main_scaffold.yaml` to train with those frozen folds.
+
+The default public random seed is `516`. Scaffold runs rely on the committed
+indices; random-split runs use the configured seed to generate folds.
+
+## Suggested Checks
+
+Before launching a long run:
+
+- Confirm that `data/raw/cleaned/data_set.csv` contains `SMILES` and `MP`.
+- Confirm that feature files exist under `data/raw/cleaned/`.
+- Confirm that the MoLFormer path resolves locally.
+- Run `git status` and record the commit hash used for the experiment.
 
 ## What Is Not Tracked
 

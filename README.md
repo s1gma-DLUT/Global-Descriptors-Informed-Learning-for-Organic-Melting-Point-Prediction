@@ -4,6 +4,10 @@ This repository contains the training code for a multimodal melting point
 prediction model. The model uses SMILES text, molecular graphs, XTB features,
 and RDKit descriptors.
 
+The project is organized for reproducible research: source CSV data and frozen
+split indices are kept in the repository, while large feature tensors,
+checkpoints, scalers, logs, and generated prediction files stay local.
+
 ## Repository Layout
 
 ```text
@@ -20,6 +24,15 @@ The main training entry point is:
 ```bash
 python scripts/02_train.py --config configs/main_scaffold.yaml
 ```
+
+Typical workflow:
+
+1. Prepare or place the cleaned CSV and precomputed feature files under
+   `data/raw/cleaned/`.
+2. Set `model_name_or_path` in a config file, or export `MOLFORMER_MODEL`.
+3. Run `scripts/02_train.py` with the scaffold or random-split config.
+4. Use the generated checkpoints and scalers locally for evaluation or
+   inference.
 
 ## Environment
 
@@ -62,6 +75,9 @@ data/raw/cleaned/rdkit3d_train.npy
 CSV files under `data/raw/` are tracked. Feature tensors and checkpoints are
 ignored by git.
 
+See `docs/dataset.md` and `docs/xtb_feature_schema.md` for the expected feature
+layout and feature order.
+
 ## Model Path
 
 Set `model_name_or_path` in the config to a local MoLFormer checkpoint or a
@@ -94,6 +110,23 @@ python scripts/02_train.py --config configs/main_random.yaml
 The public training entry point is `scripts/02_train.py`; it loads a YAML
 config and dispatches to the shared training implementation.
 
+The scaffold configuration uses the frozen validation indices in
+`splits/scaffold/`. The random configuration builds folds from the configured
+seed. The current public default seed is `516`.
+
+## Inference and Evaluation
+
+`scripts/03_eval_cv.py` provides a practical inference entry point for trained
+fold checkpoints. It imports the model definitions from the training
+implementation so architecture changes do not need to be copied into a separate
+inference-only model.
+
+The script supports:
+
+- `3d`: MoLFormer + D-MPNN + XTB/RDKit feature bundle.
+- `non3d`: MoLFormer + D-MPNN ablation.
+- `both`: run both model families and write comparable prediction columns.
+
 ## Configs
 
 - `configs/main_scaffold.yaml`: main frozen scaffold split training.
@@ -106,4 +139,5 @@ config and dispatches to the shared training implementation.
 - Keep feature tensors, checkpoints, logs, and generated outputs out of git.
 - Frozen split indices under `splits/scaffold/` are tracked for
   reproducible training.
-- See `docs/` for compact details about the model and data schema.
+- See `docs/` for compact details about the model, data schema, and
+  reproducibility checklist.
