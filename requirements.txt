@@ -1,6 +1,6 @@
 # Core dependencies
 python>=3.8
-pytorch>=1.10.0
+torch>=1.10.0
 torch-geometric>=2.0.0
 transformers>=4.10.0
 rdkit>=2021.03.1

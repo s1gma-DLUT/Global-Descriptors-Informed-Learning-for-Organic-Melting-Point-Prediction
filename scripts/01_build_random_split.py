@@ -19,10 +19,9 @@ import json
 import argparse
 import sys
 from datetime import datetime
-from typing import Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
-import torch
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 REPO_ROOT = os.path.dirname(SCRIPT_DIR)
@@ -33,21 +32,36 @@ if SRC_DIR not in sys.path:
 from utils.splits import DEFAULT_SEED, build_random_folds
 
 
-def load_aligned_multimodal_data() -> Tuple[pd.DataFrame, List[str], List[int]]:
+def canonicalize_smiles(smiles: str) -> Optional[str]:
+    if not smiles or not isinstance(smiles, str):
+        return None
+    from rdkit import Chem
+
+    mol = Chem.MolFromSmiles(smiles)
+    if mol is None:
+        return None
+    return Chem.MolToSmiles(mol, canonical=True)
+
+
+def load_aligned_multimodal_data(csv_path: str, xtb_path: str) -> Tuple[pd.DataFrame, List[str], List[int]]:
     """
     Load and align samples from multiple sources.
 
     Returns:
         Tuple of (aligned_df, smiles_list, sample_ids)
     """
-    # Load multimodal train data
-    multimodal_path = 'data/raw/multimodal_train.csv'
-    multimodal_df = pd.read_csv(multimodal_path)
+    multimodal_df = pd.read_csv(csv_path)
 
-    # Load XTB features
-    xtb_path = 'data/processed/XTB_train.pth'
+    import torch
+
     xtb_data = torch.load(xtb_path, weights_only=False)
-    xtb_smiles = set(xtb_data['smiles'])
+    xtb_smiles = {
+        canonicalize_smiles(str(smiles))
+        for smiles in xtb_data['smiles']
+        if canonicalize_smiles(str(smiles)) is not None
+    }
+    multimodal_df = multimodal_df.copy()
+    multimodal_df['canonical_smiles'] = multimodal_df['SMILES'].map(canonicalize_smiles)
 
     # Filter samples
     # 1. SMILES non-empty
@@ -56,10 +70,12 @@ def load_aligned_multimodal_data() -> Tuple[pd.DataFrame, List[str], List[int]]:
     mask = (
         multimodal_df['SMILES'].notna() &
         multimodal_df['MP'].notna() &
-        multimodal_df['SMILES'].isin(xtb_smiles)
+        multimodal_df['canonical_smiles'].isin(xtb_smiles)
     )
 
     aligned_df = multimodal_df[mask].reset_index(drop=True)
+    aligned_df['SMILES'] = aligned_df['canonical_smiles']
+    aligned_df = aligned_df.drop(columns=['canonical_smiles'])
     smiles_list = aligned_df['SMILES'].tolist()
     sample_ids = list(range(len(aligned_df)))
 
@@ -154,7 +170,7 @@ def generate_split_summary(
     fold_sizes: Dict[int, Dict[str, int]],
     n_folds: int = 5,
     seed: int = DEFAULT_SEED
-) -> Dict[str, any]:
+) -> Dict[str, Any]:
     """
     Generate split summary.
 
@@ -193,6 +209,18 @@ def main():
         description='Build frozen random cross-validation splits'
     )
     parser.add_argument(
+        '--input_csv',
+        type=str,
+        default='data/raw/cleaned/data_set.csv',
+        help='CSV with SMILES and MP columns'
+    )
+    parser.add_argument(
+        '--xtb_pth',
+        type=str,
+        default='data/raw/cleaned/XTB_train.pth',
+        help='Feature bundle used to align the training rows'
+    )
+    parser.add_argument(
         '--output_dir',
         type=str,
         default='splits/random',
@@ -221,7 +249,7 @@ def main():
 
     # Step 1: Load and align data
     print("1. Loading and aligning data...")
-    aligned_df, smiles_list, sample_ids = load_aligned_multimodal_data()
+    aligned_df, smiles_list, sample_ids = load_aligned_multimodal_data(args.input_csv, args.xtb_pth)
     print(f"   Total aligned samples: {len(aligned_df)}")
 
     # Step 2: Build random folds

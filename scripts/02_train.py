@@ -4,12 +4,13 @@ Training script for single-component melting point prediction.
 This is a thin wrapper around the legacy training script.
 """
 
-import os
-import sys
 import argparse
+import os
 import subprocess
-import yaml
+import sys
 from datetime import datetime
+
+import yaml
 
 
 def parse_args():
@@ -51,8 +52,9 @@ def main():
         run_name = f"{run_name}_{args.output_tag}"
     full_output_dir = os.path.join(output_dir, run_name)
     
-    # Build command to run legacy script
-    legacy_script = os.path.join(os.path.dirname(__file__), 'legacy_main_train.py')
+    use_xtb = bool(config.get('use_xtb', True))
+    legacy_script_name = 'legacy_main_train.py' if use_xtb else 'legacy_main_train_mlp_fusion.py'
+    legacy_script = os.path.join(os.path.dirname(__file__), legacy_script_name)
     cmd = [
         sys.executable, legacy_script,
         '--data_dir', config.get('data_dir', 'data'),
@@ -68,20 +70,51 @@ def main():
         '--output_tag', run_name,
     ]
     
-    # Add optional parameters if present
+    # Add optional parameters if present. These keep the YAML configs aligned
+    # with the validation protocols described in the manuscript and SI.
     optional_params = [
         ('multi_gpu_mode', config.get('multi_gpu_mode', 'none')),
         ('gpu_ids', config.get('gpu_ids', '')),
         ('device', config.get('device', '')),
         ('use_frozen_split', config.get('use_frozen_split', False)),
+        ('use_random_split', config.get('use_random_split', False)),
         ('split_dir', config.get('split_dir', 'splits/scaffold')),
         ('split_manifest', config.get('split_manifest', 'splits/scaffold/split_manifest.csv')),
+        ('max_length', config.get('max_length', None)),
+        ('grad_accum_steps', config.get('grad_accum_steps', None)),
+        ('huber_delta', config.get('huber_delta', None)),
+        ('clip_grad_norm', config.get('clip_grad_norm', None)),
+        ('cache_graphs', config.get('cache_graphs', None)),
+        ('dmpnn_layers', config.get('dmpnn_layers', None)),
+        ('dmpnn_hidden_dim', config.get('dmpnn_hidden_dim', None)),
+        ('dmpnn_output_dim', config.get('dmpnn_output_dim', None)),
+        ('dmpnn_dropout', config.get('dmpnn_dropout', None)),
+        ('common_hidden_dim', config.get('common_hidden_dim', None)),
+        ('readout_dim', config.get('readout_dim', None)),
+        ('main_branch_noise_std', config.get('main_branch_noise_std', None)),
     ]
+    if use_xtb:
+        optional_params.extend([
+            ('xtb_hidden_dim', config.get('xtb_hidden_dim', None)),
+            ('xtb_depth', config.get('xtb_depth', None)),
+            ('use_rdkit_in_xtb', config.get('use_rdkit_in_xtb', None)),
+            ('dynamic_weight_scale', config.get('dynamic_weight_scale', None)),
+            ('bias_hidden_dim', config.get('bias_hidden_dim', None)),
+            ('final_lr_scale', config.get('final_lr_scale', None)),
+        ])
+    else:
+        optional_params.extend([
+            ('scalar_hidden_dim', config.get('scalar_hidden_dim', config.get('bias_hidden_dim', None))),
+        ])
     
     for param_name, param_value in optional_params:
-        if param_name == 'use_frozen_split':
+        if param_value is None:
+            continue
+        if param_name in {'use_frozen_split', 'use_random_split'}:
             if param_value:
                 cmd.extend([f'--{param_name}'])
+        elif isinstance(param_value, bool):
+            cmd.extend([f'--{param_name}', str(param_value).lower()])
         else:
             if param_value:
                 cmd.extend([f'--{param_name}', str(param_value)])

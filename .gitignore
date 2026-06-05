@@ -85,7 +85,6 @@ scripts/PREDICT_README.md
 scripts/compute_xtb_gfn1_gfn2.py
 scripts/inference_test_set.py
 scripts/legacy_main_train_bert_proj_only.py
-scripts/legacy_main_train_mlp_fusion.py
 scripts/legacy_main_train_no_projection.py
 scripts/mp_final_seed516_bs512_1024.py
 scripts/predict_mp_fold1.py
@@ -104,5 +103,7 @@ scripts/train_random_split_no_3d.py
 *.pkl
 *.joblib
 !data/raw/**/*.csv
+!data/raw/cleaned/*.npy
+!data/raw/cleaned/*.pth
 !/splits/
 !/splits/**

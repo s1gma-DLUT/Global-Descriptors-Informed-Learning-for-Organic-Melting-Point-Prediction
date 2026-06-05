@@ -11,6 +11,8 @@ This script strictly reproduces the split logic from the original training code:
 Outputs:
 - splits/scaffold/split_manifest.csv: Complete split manifest
 - splits/scaffold/split_summary.json: Split statistics
+- splits/scaffold/fold_{1-5}_val_idx.npy: Validation indices consumed by training
+- splits/scaffold/none_idx.npy: Acyclic/no-scaffold train-only indices
 - splits/scaffold/fold{1-5}_train.csv: Train samples for each fold
 - splits/scaffold/fold{1-5}_val.csv: Validation samples for each fold
 """
@@ -19,16 +21,24 @@ import os
 import json
 import argparse
 from datetime import datetime
-from typing import Dict, List, Set, Tuple, Optional
+from typing import Any, Dict, List, Tuple, Optional
 
 import numpy as np
 import pandas as pd
-import torch
-from rdkit import Chem
-from rdkit.Chem.Scaffolds import MurckoScaffold
 
 
-def load_aligned_multimodal_data() -> Tuple[pd.DataFrame, List[str], List[int]]:
+def canonicalize_smiles(smiles: str) -> Optional[str]:
+    if not smiles or not isinstance(smiles, str):
+        return None
+    from rdkit import Chem
+
+    mol = Chem.MolFromSmiles(smiles)
+    if mol is None:
+        return None
+    return Chem.MolToSmiles(mol, canonical=True)
+
+
+def load_aligned_multimodal_data(csv_path: str, xtb_path: str) -> Tuple[pd.DataFrame, List[str], List[int]]:
     """
     Load and align samples from multiple sources.
     
@@ -37,14 +47,19 @@ def load_aligned_multimodal_data() -> Tuple[pd.DataFrame, List[str], List[int]]:
     Returns:
         Tuple of (aligned_df, smiles_list, sample_ids)
     """
-    # Load multimodal train data
-    multimodal_path = 'data/raw/multimodal_train.csv'
-    multimodal_df = pd.read_csv(multimodal_path)
+    multimodal_df = pd.read_csv(csv_path)
     
-    # Load XTB features
-    xtb_path = 'data/processed/XTB_train.pth'
+    import torch
+
     xtb_data = torch.load(xtb_path, weights_only=False)
-    xtb_smiles = set(xtb_data['smiles'])
+    xtb_smiles = {
+        canonicalize_smiles(str(smiles))
+        for smiles in xtb_data['smiles']
+        if canonicalize_smiles(str(smiles)) is not None
+    }
+
+    multimodal_df = multimodal_df.copy()
+    multimodal_df['canonical_smiles'] = multimodal_df['SMILES'].map(canonicalize_smiles)
     
     # Filter samples
     # 1. SMILES non-empty
@@ -53,10 +68,12 @@ def load_aligned_multimodal_data() -> Tuple[pd.DataFrame, List[str], List[int]]:
     mask = (
         multimodal_df['SMILES'].notna() &
         multimodal_df['MP'].notna() &
-        multimodal_df['SMILES'].isin(xtb_smiles)
+        multimodal_df['canonical_smiles'].isin(xtb_smiles)
     )
     
     aligned_df = multimodal_df[mask].reset_index(drop=True)
+    aligned_df['SMILES'] = aligned_df['canonical_smiles']
+    aligned_df = aligned_df.drop(columns=['canonical_smiles'])
     smiles_list = aligned_df['SMILES'].tolist()
     sample_ids = list(range(len(aligned_df)))
     
@@ -76,6 +93,9 @@ def get_scaffold(smiles: str) -> Optional[str]:
         Scaffold string or None if parsing fails or scaffold is empty
     """
     try:
+        from rdkit import Chem
+        from rdkit.Chem.Scaffolds import MurckoScaffold
+
         mol = Chem.MolFromSmiles(smiles)
         if mol is None:
             return None
@@ -227,6 +247,7 @@ def generate_fold_files(
         # Save fold files
         val_df.to_csv(os.path.join(output_dir, f'fold{fold}_val.csv'), index=False)
         train_df.to_csv(os.path.join(output_dir, f'fold{fold}_train.csv'), index=False)
+        np.save(os.path.join(output_dir, f'fold_{fold}_val_idx.npy'), val_df['sample_id'].astype(int).to_numpy())
         
         fold_sizes[fold] = {
             'train_size': len(train_df),
@@ -242,7 +263,7 @@ def generate_split_summary(
     none_idx: List[int],
     fold_sizes: Dict[int, Dict[str, int]],
     n_folds: int = 5
-) -> Dict[str, any]:
+) -> Dict[str, Any]:
     """
     Generate split summary.
     
@@ -285,6 +306,18 @@ def main():
         description='Build frozen scaffold-based cross-validation splits'
     )
     parser.add_argument(
+        '--input_csv',
+        type=str,
+        default='data/raw/cleaned/data_set.csv',
+        help='CSV with SMILES and MP columns'
+    )
+    parser.add_argument(
+        '--xtb_pth',
+        type=str,
+        default='data/raw/cleaned/XTB_train.pth',
+        help='Feature bundle used to align the training rows'
+    )
+    parser.add_argument(
         '--output_dir',
         type=str,
         default='splits/scaffold',
@@ -307,7 +340,7 @@ def main():
     
     # Step 1: Load and align data
     print("1. Loading and aligning data...")
-    aligned_df, smiles_list, sample_ids = load_aligned_multimodal_data()
+    aligned_df, smiles_list, sample_ids = load_aligned_multimodal_data(args.input_csv, args.xtb_pth)
     print(f"   Total aligned samples: {len(aligned_df)}")
     
     # Step 2: Build scaffold folds
@@ -336,6 +369,7 @@ def main():
     # Step 4: Generate fold files
     print("4. Generating fold files...")
     fold_sizes = generate_fold_files(manifest, args.output_dir, n_folds=args.n_folds)
+    np.save(os.path.join(args.output_dir, 'none_idx.npy'), np.asarray(none_idx, dtype=np.int64))
     for fold, sizes in fold_sizes.items():
         print(f"   Fold {fold}: train={sizes['train_size']}, val={sizes['val_size']}")
     

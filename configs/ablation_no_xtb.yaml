@@ -1,8 +1,10 @@
 task_name: "single_component_mp_no_xtb"
-split_type: "scaffold"
+split_type: "frozen_scaffold_cv"
+use_xtb: false
 data_dir: "data"
 outputs_root: "outputs"
 model_name_or_path: "PATH_OR_HF_ID_TO_MOLFORMER"
+split_dir: "splits/scaffold"
 seed: 516
 n_folds: 5
 batch_size: 256
@@ -10,7 +12,6 @@ num_workers: 8
 max_epochs: 300
 freeze_bert_epochs: 3
 final_tune_epochs: 5
-use_xtb: false
 use_rdkit: true
 use_dmpnn: true
 use_molformer: true

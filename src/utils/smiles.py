@@ -141,7 +141,7 @@ def find_unique_smiles(
         >>> find_unique_smiles(smiles, use_canonical=True)
         ['CCO', 'c1ccccc1']  # OCC duplicates CCO, benzene duplicates itself
     """
-    seen: Set[str] = []
+    seen: Set[str] = set()
     unique = []
 
     for smiles in smiles_list:
