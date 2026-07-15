@@ -1,6 +1,6 @@
 # Global Descriptors Informed Learning for Organic Melting-Point Prediction
 
-This repository supports the ChemComm manuscript and ESI for a
+This repository supports the RSC Advances manuscript and ESI for a
 descriptor-conditioned multimodal model for organic molecular melting-point
 prediction. The Global-informed model combines:
 
@@ -26,19 +26,19 @@ text and ESI:
   molecules kept in the training pool only
 - Contextual comparison: five-fold random validation
 - Ablation: topology-only model without the xTB/RDKit descriptor branch
-- External comparison: independently provided `multimodal_test` style data can
-  be evaluated with the inference script
+- Internal held-out comparison: the pre-model `multimodal_test` subset can be
+  evaluated with the inference script. Its exact selection rule and source-wise
+  composition cannot be reconstructed from the retained artifacts, so it is not
+  described as an independent-source external test set.
 
 Reported headline results from the manuscript/ESI are:
 
 | Setting | MAE | RMSE | Notes |
 | --- | ---: | ---: | --- |
-| Global-informed, random fold 5 | 21.35 | 27.82 | Main-text comparison value |
-| Global-informed, scaffold fold 5 | 23.31 | 29.98 | Main-text scaffold value |
-| Global-informed, random CV mean | 21.45 +/- 0.08 | 27.88 +/- 0.08 | ESI Table S2 |
-| Global-informed, scaffold CV mean | 23.06 +/- 0.25 | 29.74 +/- 0.24 | ESI Table S3 |
-| Topology-only, random CV mean | 21.86 +/- 0.11 | 28.50 +/- 0.11 | ESI Table S1 |
-| Topology-only, scaffold CV mean | 23.67 +/- 0.22 | 30.52 +/- 0.20 | ESI Table S4 |
+| Global-informed, random five-fold mean | 21.45 +/- 0.08 | 27.88 +/- 0.08 | Five-fold mean +/- SD |
+| Global-informed, scaffold five-fold mean | 23.06 +/- 0.25 | 29.74 +/- 0.24 | Five-fold mean +/- SD |
+| Topology-only, random five-fold mean | 21.86 +/- 0.11 | 28.50 +/- 0.11 | Five-fold mean +/- SD |
+| Topology-only, scaffold five-fold mean | 23.67 +/- 0.22 | 30.52 +/- 0.20 | Five-fold mean +/- SD |
 
 All temperatures are in degC/K differences, so MAE and RMSE values have the same
 numeric magnitude in degC and K.
@@ -102,7 +102,8 @@ one RDKit molecular-volume feature. The schema is defined in
 
 The 25D RDKit descriptor matrix contains common 2D molecular descriptors used by
 the model-side descriptor branch. During training, xTB/RDKit descriptors are
-imputed and scaled within each fold using training-fold statistics only.
+imputed and scaled within each fold using the corresponding training-fold
+statistics only.
 
 ## Data Curation
 
@@ -174,6 +175,8 @@ python scripts/05_make_figures.py --results_dir outputs
 ## Notes
 
 - Default random seed: `516`
+- Random and scaffold results are reported as five-fold means with fold-level
+  standard deviations; single-fold values are not used as headline results
 - Frozen scaffold files under `splits/scaffold/` are intended to reproduce the
   scaffold validation protocol in the manuscript and ESI
 - xTB must be available for new-molecule Global-informed inference unless
