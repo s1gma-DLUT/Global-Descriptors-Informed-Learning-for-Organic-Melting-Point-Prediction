@@ -172,6 +172,35 @@ python scripts/04_make_tables.py --results_dir outputs
 python scripts/05_make_figures.py --results_dir outputs
 ```
 
+## Citation
+
+If you use this code or dataset, please cite the associated paper:
+
+> X. Pu, Y.-S. Meng and T. Liu, Global descriptors informed learning for organic
+> melting-point prediction, *RSC Adv.*, 2026, DOI:
+> [10.1039/D6RA05490K](https://doi.org/10.1039/D6RA05490K).
+
+BibTeX:
+
+```bibtex
+@article{Pu_2026,
+  title = {Global descriptors informed learning for organic melting-point prediction},
+  author = {Pu, Xuefeng and Meng, Yin-Shan and Liu, Tao},
+  journal = {RSC Advances},
+  shortjournal = {RSC Adv.},
+  publisher = {Royal Society of Chemistry},
+  issn = {2046-2069},
+  year = {2026},
+  month = sep,
+  day = {1},
+  eid = {D6RA05490K},
+  doi = {10.1039/D6RA05490K},
+  pmid = {42683089},
+  pmcid = {PMC13531300},
+  url = {https://doi.org/10.1039/D6RA05490K}
+}
+```
+
 ## Notes
 
 - Default random seed: `516`
